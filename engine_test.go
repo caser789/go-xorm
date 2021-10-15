@@ -65,3 +65,32 @@ func TestEngine_PlaceHolders(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_PKColumn(t *testing.T) {
+	var tests = []struct {
+		desc string
+		s    *Table
+		want Column
+	}{
+		{
+			desc: "test table primary key column",
+			s: &Table{
+				Columns: map[string]Column{
+					"name": Column{Name: "name", IsPrimaryKey: true},
+					"age":  Column{Name: "age"},
+				},
+				PrimaryKey: "name",
+			},
+			want: Column{Name: "name", IsPrimaryKey: true},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := tt.s.PKColumn()
+			if got != tt.want {
+				t.Fatalf("[%02d] test %q, unexpected error: %v != %v", i, tt.desc, tt.want, got)
+			}
+		})
+	}
+}

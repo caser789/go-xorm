@@ -68,3 +68,7 @@ func (table *Table) PlaceHolders() string {
 	}
 	return strings.Join(colNames, ", ")
 }
+
+func (table *Table) PKColumn() Column {
+	return table.Columns[table.PrimaryKey]
+}
