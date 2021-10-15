@@ -57,3 +57,14 @@ func (table *Table) ColumnStr() string {
 	}
 	return strings.Join(colNames, ", ")
 }
+
+func (table *Table) PlaceHolders() string {
+	colNames := make([]string, 0)
+	for _, col := range table.Columns {
+		if col.Name == "" {
+			continue
+		}
+		colNames = append(colNames, "?")
+	}
+	return strings.Join(colNames, ", ")
+}
