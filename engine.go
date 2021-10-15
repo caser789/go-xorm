@@ -1,6 +1,7 @@
 package xorm
 
 import (
+	"database/sql"
 	"reflect"
 	"strings"
 )
@@ -71,4 +72,45 @@ func (table *Table) PlaceHolders() string {
 
 func (table *Table) PKColumn() Column {
 	return table.Columns[table.PrimaryKey]
+}
+
+type Engine struct {
+	Mapper          IMapper
+	Protocol        string
+	UserName        string
+	Password        string
+	Host            string
+	Port            int
+	DBName          string
+	Charset         string
+	Others          string
+	Tables          map[string]Table
+	AutoIncrement   string
+	ShowSQL         bool
+	QuoteIdentifier string
+}
+
+func (e *Engine) OpenDB() (db *sql.DB, err error) {
+	db = nil
+	err = nil
+	if e.Protocol == "sqlite" {
+		// 'sqlite:///foo.db'
+		db, err = sql.Open("sqlite3", e.Others)
+		// 'sqlite:///:memory:'
+	} else if e.Protocol == "mysql" {
+		// 'mysql://<username>:<passwd>@<host>/<dbname>?charset=<encoding>'
+		connstr := strings.Join([]string{e.UserName, ":",
+			e.Password, "@tcp(", e.Host, ":3306)/", e.DBName, "?charset=", e.Charset}, "")
+		db, err = sql.Open(e.Protocol, connstr)
+	} else if e.Protocol == "mymysql" {
+		//   DBNAME/USER/PASSWD
+		connstr := strings.Join([]string{e.DBName, e.UserName, e.Password}, "/")
+		db, err = sql.Open(e.Protocol, connstr)
+		//   unix:SOCKPATH*DBNAME/USER/PASSWD
+		//   unix:SOCKPATH,OPTIONS*DBNAME/USER/PASSWD
+		//   tcp:ADDR*DBNAME/USER/PASSWD
+		//   tcp:ADDR,OPTIONS*DBNAME/USER/PASSWD
+	}
+
+	return
 }
