@@ -12,9 +12,10 @@ func (mapper SnakeMapper) Table2Obj(name string) string {
 }
 
 func (mapper SnakeMapper) Obj2Table(name string) string {
-	return ""
+	return snakeCaseName(name)
 }
 
+// snakeCase to titleCase
 // ab_cd_ef -> AbCdEf
 // doesn't work for words start with _
 func titleCasedName(name string) string {
@@ -35,4 +36,25 @@ func titleCasedName(name string) string {
 	}
 
 	return string(newStr)
+}
+
+// titleCase to snakeCase
+// AbCdEf -> ab_cd_ef
+func snakeCaseName(name string) string {
+	newstr := make([]rune, 0)
+	firstTime := true
+
+	for _, chr := range name {
+		if isUpper := 'A' <= chr && chr <= 'Z'; isUpper {
+			if firstTime == true {
+				firstTime = false
+			} else {
+				newstr = append(newstr, '_')
+			}
+			chr -= ('A' - 'a')
+		}
+		newstr = append(newstr, chr)
+	}
+
+	return string(newstr)
 }
