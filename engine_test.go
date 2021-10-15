@@ -94,3 +94,56 @@ func TestEngine_PKColumn(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLType_genSQL(t *testing.T) {
+	var tests = []struct {
+		desc string
+		s    SQLType
+		want string
+	}{
+		{
+			desc: "test Int",
+			s:    Int,
+			want: "int(111)",
+		},
+		{
+			desc: "test Char",
+			s:    Char,
+			want: "char(111)",
+		},
+		{
+			desc: "test Varchar",
+			s:    Varchar,
+			want: "varchar(111)",
+		},
+		{
+			desc: "test Date",
+			s:    Date,
+			want: " datetime ",
+		},
+		{
+			desc: "test Decimal",
+			s:    Decimal,
+			want: "decimal(111)",
+		},
+		{
+			desc: "test Float",
+			s:    Float,
+			want: "float(111)",
+		},
+		{
+			desc: "test Double",
+			s:    Double,
+			want: "double(111)",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := tt.s.genSQL(111)
+			if got != tt.want {
+				t.Fatalf("[%02d] test %q, unexpected error: %v != %v", i, tt.desc, tt.want, got)
+			}
+		})
+	}
+}

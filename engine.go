@@ -3,6 +3,7 @@ package xorm
 import (
 	"database/sql"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -20,6 +21,13 @@ var (
 	Float   = SQLType{"float", 31}
 	Double  = SQLType{"double", 31}
 )
+
+func (sqlType SQLType) genSQL(length int) string {
+	if sqlType == Date {
+		return " datetime "
+	}
+	return sqlType.Name + "(" + strconv.Itoa(length) + ")"
+}
 
 const (
 	PQSQL   = "pqsql"
@@ -112,5 +120,25 @@ func (e *Engine) OpenDB() (db *sql.DB, err error) {
 		//   tcp:ADDR,OPTIONS*DBNAME/USER/PASSWD
 	}
 
+	return
+}
+
+func (engine *Engine) MakeSession() (session Session, err error) {
+	db, err := engine.OpenDB()
+	if err != nil {
+		return Session{}, err
+	}
+	if engine.Protocol == "pgsql" {
+		engine.QuoteIdentifier = "\""
+		session = Session{Engine: engine, Db: db, ParamIteration: 1}
+	} else if engine.Protocol == "mssql" {
+		engine.QuoteIdentifier = ""
+		session = Session{Engine: engine, Db: db, ParamIteration: 1}
+	} else {
+		engine.QuoteIdentifier = "`"
+		session = Session{Engine: engine, Db: db, ParamIteration: 1}
+	}
+	session.Mapper = engine.Mapper
+	session.Init()
 	return
 }
