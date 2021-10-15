@@ -147,3 +147,48 @@ func TestSQLType_genSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_genCreateSQL(t *testing.T) {
+	e := Engine{
+		AutoIncrement: "engine-autoinc",
+	}
+	var tests = []struct {
+		desc string
+		s    *Table
+		want string
+	}{
+		{
+			desc: "test genCreateSQL",
+			s: &Table{
+				Columns: map[string]Column{
+					"name": Column{
+						Name:         "name",
+						IsPrimaryKey: true,
+						Length:       22,
+					},
+					"age": Column{
+						SQLType:       Int,
+						Name:          "age",
+						Length:        123,
+						Nullable:      false,
+						Default:       "345",
+						IsUnique:      true,
+						AutoIncrement: true,
+					},
+				},
+				PrimaryKey: "name",
+				Name:       "student",
+			},
+			want: "CREATE TABLE IF NOT EXISTS `student` (`name` (22)  NOT NULL PRIMARY KEY ,`age` int(123)  NOT NULL engine-autoinc Unique);",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := e.genCreateSQL(tt.s)
+			if got != tt.want {
+				t.Fatalf("[%02d] test %q, unexpected error: %v != %v", i, tt.desc, tt.want, got)
+			}
+		})
+	}
+}

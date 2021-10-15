@@ -2,6 +2,7 @@ package xorm
 
 import (
 	"database/sql"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -141,4 +142,35 @@ func (engine *Engine) MakeSession() (session Session, err error) {
 	session.Mapper = engine.Mapper
 	session.Init()
 	return
+}
+
+func (e *Engine) genCreateSQL(table *Table) string {
+	sql := "CREATE TABLE IF NOT EXISTS `" + table.Name + "` ("
+	//fmt.Println(session.Mapper.Obj2Table(session.PrimaryKey))
+	for _, col := range table.Columns {
+		if col.Name != "" {
+			sql += "`" + col.Name + "` " + col.SQLType.genSQL(col.Length) + " "
+			if col.Nullable {
+				sql += " NULL "
+			} else {
+				sql += " NOT NULL "
+			}
+			//fmt.Println(key)
+			if col.IsPrimaryKey {
+				sql += "PRIMARY KEY "
+			}
+			if col.AutoIncrement {
+				sql += e.AutoIncrement + " "
+			}
+			if col.IsUnique {
+				sql += "Unique "
+			}
+			sql += ","
+		}
+	}
+	sql = sql[:len(sql)-2] + ");"
+	if e.ShowSQL {
+		fmt.Println(sql)
+	}
+	return sql
 }
