@@ -7,10 +7,12 @@ type IMapper interface {
 
 type SnakeMapper struct{}
 
+// Table2Obj converts snake-case name to title-case
 func (mapper SnakeMapper) Table2Obj(name string) string {
 	return titleCasedName(name)
 }
 
+// Obj2Table converts title-case name to snake-case
 func (mapper SnakeMapper) Obj2Table(name string) string {
 	return snakeCaseName(name)
 }
