@@ -56,7 +56,21 @@ func (statement Statement) genSelectSql(columnStr string) (a string) {
 				a,
 				statement.OffsetStr,
 				statement.LimitStr)
-		}
+		} else if statement.LimitStr > 0 {
+			a = fmt.Sprintf("SELECT top %v %v FROM %v", statement.LimitStr, columnStr, statement.Table.Name)
+			if statement.WhereStr != "" {
+				a = fmt.Sprintf("%v WHERE %v", a, statement.WhereStr)
+			}
+			if statement.GroupByStr != "" {
+				a = fmt.Sprintf("%v %v", a, statement.GroupByStr)
+			}
+			if statement.HavingStr != "" {
+				a = fmt.Sprintf("%v %v", a, statement.HavingStr)
+			}
+			if statement.OrderStr != "" {
+				a = fmt.Sprintf("%v ORDER BY %v", a, statement.OrderStr)
+			}
+        }
 	}
 	return
 }
