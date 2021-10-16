@@ -39,6 +39,15 @@ func (statement *Statement) OrderBy(order string) *Statement {
 	return statement
 }
 
+func (statement Statement) generateSql() string {
+	columnStr := statement.Table.ColumnStr()
+	return statement.genSelectSql(columnStr)
+}
+
+func (statement Statement) genCountSql() string {
+	return statement.genSelectSql("count(*) as total")
+}
+
 func (statement Statement) genSelectSql(columnStr string) (a string) {
 	session := statement.Session
 	if session.Engine.Protocol == "mssql" {
