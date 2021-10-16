@@ -156,3 +156,7 @@ func getTypeName(obj interface{}) (typestr string) {
 
 	return
 }
+
+func (session *Session) TableName(bean interface{}) string {
+	return session.Mapper.Obj2Table(StructName(bean))
+}

@@ -108,3 +108,19 @@ func TestSession_Where(t *testing.T) {
 		})
 	}
 }
+
+func TestSession_TableName(t *testing.T) {
+	type UserProfileTab struct{}
+	u := &UserProfileTab{}
+
+	s := &Session{
+		Mapper: &SnakeMapper{},
+	}
+	got := s.TableName(u)
+
+	want := "user_profile_tab"
+
+	if got != want {
+		t.Fatalf("test TestSession_TableName, unexpected error: %v != %v", got, want)
+	}
+}
