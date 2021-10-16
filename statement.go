@@ -70,7 +70,21 @@ func (statement Statement) genSelectSql(columnStr string) (a string) {
 			if statement.OrderStr != "" {
 				a = fmt.Sprintf("%v ORDER BY %v", a, statement.OrderStr)
 			}
-        }
+		} else {
+			a = fmt.Sprintf("SELECT %v FROM %v", columnStr, statement.Table.Name)
+			if statement.WhereStr != "" {
+				a = fmt.Sprintf("%v WHERE %v", a, statement.WhereStr)
+			}
+			if statement.GroupByStr != "" {
+				a = fmt.Sprintf("%v %v", a, statement.GroupByStr)
+			}
+			if statement.HavingStr != "" {
+				a = fmt.Sprintf("%v %v", a, statement.HavingStr)
+			}
+			if statement.OrderStr != "" {
+				a = fmt.Sprintf("%v ORDER BY %v", a, statement.OrderStr)
+			}
+		}
 	}
 	return
 }

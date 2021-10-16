@@ -88,71 +88,131 @@ func TestStatement_genSelectSql(t *testing.T) {
 			},
 			want: "select col-a from (select ROW_NUMBER() OVER(order by name )as rownum,col-a from student WHERE a == b) as a where rownum between 10 and 100",
 		},
-        {
+		{
 			desc: "test mssql no offset has limit",
 			s: &Statement{
 				Session: &Session{
 					Engine: &Engine{Protocol: "mssql"},
 				},
-				Table:     table,
-				LimitStr:  100,
+				Table:    table,
+				LimitStr: 100,
 			},
 			want: "SELECT top 100 col-a FROM student",
-        },
-        {
+		},
+		{
 			desc: "test mssql no offset has limit, where",
 			s: &Statement{
 				Session: &Session{
 					Engine: &Engine{Protocol: "mssql"},
 				},
-				Table:     table,
-				LimitStr:  100,
-				WhereStr:  "a == b",
+				Table:    table,
+				LimitStr: 100,
+				WhereStr: "a == b",
 			},
 			want: "SELECT top 100 col-a FROM student WHERE a == b",
-        },
-        {
+		},
+		{
 			desc: "test mssql no offset has limit, where, group by",
 			s: &Statement{
 				Session: &Session{
 					Engine: &Engine{Protocol: "mssql"},
 				},
-				Table:     table,
-				LimitStr:  100,
-				WhereStr:  "a == b",
-                GroupByStr: "group by c",
+				Table:      table,
+				LimitStr:   100,
+				WhereStr:   "a == b",
+				GroupByStr: "group by c",
 			},
 			want: "SELECT top 100 col-a FROM student WHERE a == b group by c",
-        },
-        {
+		},
+		{
 			desc: "test mssql no offset has limit, where, group by, having",
 			s: &Statement{
 				Session: &Session{
 					Engine: &Engine{Protocol: "mssql"},
 				},
-				Table:     table,
-				LimitStr:  100,
-				WhereStr:  "a == b",
-                GroupByStr: "group by c",
-                HavingStr: "having d = e",
+				Table:      table,
+				LimitStr:   100,
+				WhereStr:   "a == b",
+				GroupByStr: "group by c",
+				HavingStr:  "having d = e",
 			},
 			want: "SELECT top 100 col-a FROM student WHERE a == b group by c having d = e",
-        },
-        {
+		},
+		{
 			desc: "test mssql no offset has limit, where, group by, having, order by",
 			s: &Statement{
 				Session: &Session{
 					Engine: &Engine{Protocol: "mssql"},
 				},
-				Table:     table,
-				LimitStr:  100,
-				WhereStr:  "a == b",
-                GroupByStr: "group by c",
-                HavingStr: "having d = e",
-                OrderStr: "f",
+				Table:      table,
+				LimitStr:   100,
+				WhereStr:   "a == b",
+				GroupByStr: "group by c",
+				HavingStr:  "having d = e",
+				OrderStr:   "f",
 			},
 			want: "SELECT top 100 col-a FROM student WHERE a == b group by c having d = e ORDER BY f",
-        },
+		},
+		{
+			desc: "test mssql no offset no limit",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table: table,
+			},
+			want: "SELECT col-a FROM student",
+		},
+		{
+			desc: "test mssql no offset no limit, where",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table:    table,
+				WhereStr: "a == b",
+			},
+			want: "SELECT col-a FROM student WHERE a == b",
+		},
+		{
+			desc: "test mssql no offset no limit, where, groupby",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table:      table,
+				WhereStr:   "a == b",
+				GroupByStr: "group by c",
+			},
+			want: "SELECT col-a FROM student WHERE a == b group by c",
+		},
+		{
+			desc: "test mssql no offset no limit, where, groupby, having",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table:      table,
+				WhereStr:   "a == b",
+				GroupByStr: "group by c",
+				HavingStr:  "having d = e",
+			},
+			want: "SELECT col-a FROM student WHERE a == b group by c having d = e",
+		},
+		{
+			desc: "test mssql no offset no limit, where, groupby, having, order",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table:      table,
+				WhereStr:   "a == b",
+				GroupByStr: "group by c",
+				HavingStr:  "having d = e",
+				OrderStr:   "f",
+			},
+			want: "SELECT col-a FROM student WHERE a == b group by c having d = e ORDER BY f",
+		},
 	}
 
 	for i, tt := range tests {
