@@ -58,20 +58,45 @@ func TestStatement_genSelectSql(t *testing.T) {
 		Name:       "student",
 	}
 
-	s := &Statement{
-		Session: &Session{
-			Engine: &Engine{
-				Protocol: "mssql",
+	var tests = []struct {
+		desc string
+		s    *Statement
+		want string
+	}{
+		{
+			desc: "test mssql offset and limit",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table:     table,
+				OffsetStr: 10,
+				LimitStr:  100,
 			},
+			want: "select col-a from (select ROW_NUMBER() OVER(order by name )as rownum,col-a from student) as a where rownum between 10 and 100",
 		},
-		Table:     table,
-		OffsetStr: 10,
-		LimitStr:  100,
+		{
+			desc: "test mssql offset and limit and where",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "mssql"},
+				},
+				Table:     table,
+				OffsetStr: 10,
+				LimitStr:  100,
+				WhereStr:  "a == b",
+			},
+			want: "select col-a from (select ROW_NUMBER() OVER(order by name )as rownum,col-a from student WHERE a == b) as a where rownum between 10 and 100",
+		},
 	}
 
-	got := s.genSelectSql("col-a")
-	want := "select col-a from (select ROW_NUMBER() OVER(order by name )as rownum,col-a from student) as a where rownum between 10 and 100"
-	if got != want {
-		t.Fatalf("test TestStatement_genSelectSql, unexpected error: %v != %v", got, want)
+	for i, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := tt.s.genSelectSql("col-a")
+			if got != tt.want {
+				t.Fatalf("[%02d] test %q, unexpected error: %v != %v", i, tt.desc, tt.want, got)
+			}
+		})
 	}
+
 }

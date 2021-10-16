@@ -19,9 +19,8 @@ func TestEngine_ColumnStr(t *testing.T) {
 			desc: "table column in string",
 			s: &Table{Columns: map[string]Column{
 				"name": Column{Name: "name"},
-				"age":  Column{Name: "age"},
 			}},
-			want: "name, age",
+			want: "name",
 		},
 	}
 
