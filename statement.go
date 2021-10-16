@@ -28,3 +28,9 @@ func (statement *Statement) Offset(offset int) *Statement {
 	statement.OffsetStr = offset
 	return statement
 }
+
+// OrderBy sets OrderStr
+func (statement *Statement) OrderBy(order string) *Statement {
+	statement.OrderStr = order
+	return statement
+}

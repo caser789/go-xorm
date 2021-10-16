@@ -35,3 +35,15 @@ func TestStatement_Offset(t *testing.T) {
 		t.Fatalf("test TestStatement_Offset, unexpected error: %v != %v", s.LimitStr, 10)
 	}
 }
+
+func TestStatement_OrderBy(t *testing.T) {
+	s := &Statement{}
+	if s.OrderStr != "" {
+		t.Fatalf("test TestStatement_OrderBy, unexpected error: %v != %v", s.OrderStr, "")
+	}
+
+	s = s.OrderBy("ab")
+	if s.OrderStr != "ab" {
+		t.Fatalf("test TestStatement_OrderBy, unexpected error: %v != %v", s.OrderStr, "ab")
+	}
+}
