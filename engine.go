@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type SQLType struct {
@@ -28,6 +29,27 @@ func (sqlType SQLType) genSQL(length int) string {
 		return " datetime "
 	}
 	return sqlType.Name + "(" + strconv.Itoa(length) + ")"
+}
+
+func Type(bean interface{}) reflect.Type {
+	sliceValue := reflect.Indirect(reflect.ValueOf(bean))
+	return reflect.TypeOf(sliceValue.Interface())
+}
+
+func Type2SQLType(t reflect.Type) (st SQLType) {
+	switch k := t.Kind(); k {
+	case reflect.Int, reflect.Int32, reflect.Int64:
+		st = Int
+	case reflect.String:
+		st = Varchar
+	case reflect.Struct:
+		if t == reflect.TypeOf(time.Time{}) {
+			st = Date
+		}
+	default:
+		st = Varchar
+	}
+	return
 }
 
 const (
