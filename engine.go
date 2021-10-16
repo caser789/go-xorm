@@ -204,3 +204,234 @@ func (e *Engine) genDropSQL(table *Table) string {
 	}
 	return sql
 }
+
+// MapType Get Model's Table
+func (engine *Engine) MapType(t reflect.Type) Table {
+	table := Table{Name: engine.Mapper.Obj2Table(t.Name()), Type: t}
+	table.Columns = make(map[string]Column)
+	var pkCol *Column = nil
+	var pkstr = ""
+
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag
+		ormTagStr := tag.Get("xorm")
+		var col Column
+		fieldType := t.Field(i).Type
+
+		if ormTagStr != "" {
+			col = Column{FieldName: t.Field(i).Name}
+			ormTagStr = strings.ToLower(ormTagStr)
+			tags := strings.Split(ormTagStr, " ")
+			// TODO:
+			if len(tags) > 0 {
+				if tags[0] == "-" {
+					continue
+				}
+				for j, key := range tags {
+					switch k := strings.ToLower(key); k {
+					case "pk":
+						col.IsPrimaryKey = true
+						pkCol = &col
+					case "null":
+						col.Nullable = (tags[j-1] != "not")
+					case "autoincr":
+						col.AutoIncrement = true
+					case "default":
+						col.Default = tags[j+1]
+					case "int":
+						col.SQLType = Int
+					case "not":
+					default:
+						col.Name = k
+					}
+				}
+				if col.SQLType.Name == "" {
+					col.SQLType = Type2SQLType(fieldType)
+					col.Length = col.SQLType.DefaultLength
+				}
+
+				if col.Name == "" {
+					col.Name = engine.Mapper.Obj2Table(t.Field(i).Name)
+				}
+			}
+		}
+
+		if col.Name == "" {
+			sqlType := Type2SQLType(fieldType)
+			col = Column{engine.Mapper.Obj2Table(t.Field(i).Name), t.Field(i).Name, sqlType,
+				sqlType.DefaultLength, true, "", false, false, false}
+		}
+		table.Columns[col.Name] = col
+		if strings.ToLower(t.Field(i).Name) == "id" {
+			pkstr = col.Name
+		}
+	}
+
+	if pkCol == nil {
+		if pkstr != "" {
+			col := table.Columns[pkstr]
+			col.IsPrimaryKey = true
+			col.AutoIncrement = true
+			col.Nullable = false
+			col.Length = Int.DefaultLength
+			table.PrimaryKey = col.Name
+		}
+	} else {
+		table.PrimaryKey = pkCol.Name
+	}
+
+	return table
+}
+
+/*
+map an object into a table object
+*/
+func (engine *Engine) MapOne(bean interface{}) Table {
+	t := Type(bean)
+	return engine.MapType(t)
+}
+
+// Register Model's table to engine
+func (engine *Engine) Map(beans ...interface{}) (e error) {
+	for _, bean := range beans {
+		//t := getBeanType(bean)
+		tableName := engine.Mapper.Obj2Table(StructName(bean))
+		if _, ok := engine.Tables[tableName]; !ok {
+			table := engine.MapOne(bean)
+			engine.Tables[table.Name] = table
+		}
+	}
+	return
+}
+
+func (engine *Engine) UnMap(beans ...interface{}) (e error) {
+	for _, bean := range beans {
+		//t := getBeanType(bean)
+		tableName := engine.Mapper.Obj2Table(StructName(bean))
+		if _, ok := engine.Tables[tableName]; ok {
+			delete(engine.Tables, tableName)
+		}
+	}
+	return
+}
+
+func (e *Engine) DropAll() error {
+	session, err := e.MakeSession()
+	session.Begin()
+	defer session.Close()
+	if err != nil {
+		return err
+	}
+
+	for _, table := range e.Tables {
+		sql := e.genDropSQL(&table)
+		_, err = session.Exec(sql)
+		if err != nil {
+			session.Rollback()
+			break
+		}
+	}
+	session.Commit()
+	return err
+}
+
+func (e *Engine) CreateTables(beans ...interface{}) error {
+	session, err := e.MakeSession()
+	session.Begin()
+	defer session.Close()
+	if err != nil {
+		return err
+	}
+	for _, bean := range beans {
+		table := e.MapOne(bean)
+		e.Tables[table.Name] = table
+		sql := e.genCreateSQL(&table)
+		_, err = session.Exec(sql)
+		if err != nil {
+			session.Rollback()
+			break
+		}
+	}
+	session.Commit()
+	return err
+}
+
+func (e *Engine) CreateAll() error {
+	session, err := e.MakeSession()
+	session.Begin()
+	defer session.Close()
+	if err != nil {
+		return err
+	}
+
+	for _, table := range e.Tables {
+		sql := e.genCreateSQL(&table)
+		_, err = session.Exec(sql)
+		if err != nil {
+			session.Rollback()
+			break
+		}
+	}
+	session.Commit()
+	return err
+}
+
+func (engine *Engine) Insert(beans ...interface{}) (int64, error) {
+	session, err := engine.MakeSession()
+	defer session.Close()
+	if err != nil {
+		return -1, err
+	}
+
+	return session.Insert(beans...)
+}
+
+func (engine *Engine) Update(bean interface{}) (int64, error) {
+	session, err := engine.MakeSession()
+	defer session.Close()
+	if err != nil {
+		return -1, err
+	}
+
+	return session.Update(bean)
+}
+
+func (engine *Engine) Delete(bean interface{}) (int64, error) {
+	session, err := engine.MakeSession()
+	defer session.Close()
+	if err != nil {
+		return -1, err
+	}
+
+	return session.Delete(bean)
+}
+
+func (engine *Engine) Get(bean interface{}) error {
+	session, err := engine.MakeSession()
+	defer session.Close()
+	if err != nil {
+		return err
+	}
+
+	return session.Get(bean)
+}
+
+func (engine *Engine) Find(beans interface{}) error {
+	session, err := engine.MakeSession()
+	defer session.Close()
+	if err != nil {
+		return err
+	}
+
+	return session.Find(beans)
+}
+
+func (engine *Engine) Count(bean interface{}) (int64, error) {
+	session, err := engine.MakeSession()
+	defer session.Close()
+	if err != nil {
+		return 0, err
+	}
+
+	return session.Count(bean)
+}

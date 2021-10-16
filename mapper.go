@@ -60,3 +60,22 @@ func snakeCaseName(name string) string {
 
 	return string(newstr)
 }
+
+func Pascal2Sql(s string) (d string) {
+	d = ""
+	lastIdx := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			if lastIdx < i {
+				d += s[lastIdx+1 : i]
+			}
+			if i != 0 {
+				d += "_"
+			}
+			d += string(s[i] + 32)
+			lastIdx = i
+		}
+	}
+	d += s[lastIdx+1:]
+	return
+}
