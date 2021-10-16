@@ -84,3 +84,49 @@ func (session *Session) Where(querystring interface{}, args ...interface{}) *Ses
 	statement.ParamStr = args
 	return session
 }
+
+func (session *Session) Limit(start int, size ...int) *Session {
+	session.AutoStatement().LimitStr = start
+	if len(size) > 0 {
+		session.CurrentStatement().OffsetStr = size[0]
+	}
+	return session
+}
+
+func (session *Session) Offset(offset int) *Session {
+	session.AutoStatement().OffsetStr = offset
+	return session
+}
+
+func (session *Session) OrderBy(order string) *Session {
+	session.AutoStatement().OrderStr = order
+	return session
+}
+
+func (session *Session) GroupBy(keys string) *Session {
+	session.AutoStatement().GroupByStr = fmt.Sprintf("GROUP BY %v", keys)
+	return session
+}
+
+func (session *Session) Having(conditions string) *Session {
+	session.AutoStatement().HavingStr = fmt.Sprintf("HAVING %v", conditions)
+	return session
+}
+
+//The join_operator should be one of INNER, LEFT OUTER, CROSS etc - this will be prepended to JOIN
+func (session *Session) Join(join_operator, tablename, condition string) *Session {
+	if session.AutoStatement().JoinStr != "" {
+		session.CurrentStatement().JoinStr = session.CurrentStatement().JoinStr + fmt.Sprintf("%v JOIN %v ON %v", join_operator, tablename, condition)
+	} else {
+		session.CurrentStatement().JoinStr = fmt.Sprintf("%v JOIN %v ON %v", join_operator, tablename, condition)
+	}
+
+	return session
+}
+
+func (session *Session) Commit() {
+	for _, statement := range session.Statements {
+		sql := statement.generateSql()
+		session.Exec(sql)
+	}
+}
