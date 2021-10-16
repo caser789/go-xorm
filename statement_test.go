@@ -213,6 +213,102 @@ func TestStatement_genSelectSql(t *testing.T) {
 			},
 			want: "SELECT col-a FROM student WHERE a == b group by c having d = e ORDER BY f",
 		},
+		{
+			desc: "test non-mssql",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table: table,
+			},
+			want: "SELECT col-a FROM student",
+		},
+		{
+			desc: "test non-mssql join",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table:   table,
+				JoinStr: "join b",
+			},
+			want: "SELECT col-a FROM student join b",
+		},
+		{
+			desc: "test non-mssql join where groupby",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table:      table,
+				JoinStr:    "join b",
+				WhereStr:   "c == d",
+				GroupByStr: "group by e",
+			},
+			want: "SELECT col-a FROM student join b WHERE c == d group by e",
+		},
+		{
+			desc: "test non-mssql join where groupby having",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table:      table,
+				JoinStr:    "join b",
+				WhereStr:   "c == d",
+				GroupByStr: "group by e",
+				HavingStr:  "having f = g",
+			},
+			want: "SELECT col-a FROM student join b WHERE c == d group by e having f = g",
+		},
+		{
+			desc: "test non-mssql join where groupby having order",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table:      table,
+				JoinStr:    "join b",
+				WhereStr:   "c == d",
+				GroupByStr: "group by e",
+				HavingStr:  "having f = g",
+				OrderStr:   "j",
+			},
+			want: "SELECT col-a FROM student join b WHERE c == d group by e having f = g ORDER BY j",
+		},
+		{
+			desc: "test non-mssql join where groupby having order offset",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table:      table,
+				JoinStr:    "join b",
+				WhereStr:   "c == d",
+				GroupByStr: "group by e",
+				HavingStr:  "having f = g",
+				OrderStr:   "j",
+				OffsetStr:  10,
+				LimitStr:   100,
+			},
+			want: "SELECT col-a FROM student join b WHERE c == d group by e having f = g ORDER BY j LIMIT 10, 100",
+		},
+		{
+			desc: "test non-mssql join where groupby having order limit without offset",
+			s: &Statement{
+				Session: &Session{
+					Engine: &Engine{Protocol: "sql"},
+				},
+				Table:      table,
+				JoinStr:    "join b",
+				WhereStr:   "c == d",
+				GroupByStr: "group by e",
+				HavingStr:  "having f = g",
+				OrderStr:   "j",
+				LimitStr:   100,
+			},
+			want: "SELECT col-a FROM student join b WHERE c == d group by e having f = g ORDER BY j LIMIT 100",
+		},
 	}
 
 	for i, tt := range tests {

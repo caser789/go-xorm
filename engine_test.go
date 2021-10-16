@@ -160,11 +160,6 @@ func TestEngine_genCreateSQL(t *testing.T) {
 			desc: "test genCreateSQL",
 			s: &Table{
 				Columns: map[string]Column{
-					"name": Column{
-						Name:         "name",
-						IsPrimaryKey: true,
-						Length:       22,
-					},
 					"age": Column{
 						SQLType:       Int,
 						Name:          "age",
@@ -173,12 +168,13 @@ func TestEngine_genCreateSQL(t *testing.T) {
 						Default:       "345",
 						IsUnique:      true,
 						AutoIncrement: true,
+						IsPrimaryKey:  true,
 					},
 				},
 				PrimaryKey: "name",
 				Name:       "student",
 			},
-			want: "CREATE TABLE IF NOT EXISTS `student` (`name` (22)  NOT NULL PRIMARY KEY ,`age` int(123)  NOT NULL engine-autoinc Unique);",
+			want: "CREATE TABLE IF NOT EXISTS `student` (`age` int(123)  NOT NULL PRIMARY KEY engine-autoinc Unique);",
 		},
 	}
 
