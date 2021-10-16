@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 type Session struct {
@@ -142,4 +143,16 @@ func Type2StructName(v reflect.Type) string {
 		v = v.Elem()
 	}
 	return v.Name()
+}
+
+func getTypeName(obj interface{}) (typestr string) {
+	typ := reflect.TypeOf(obj)
+	typestr = typ.String()
+
+	lastDotIndex := strings.LastIndex(typestr, ".")
+	if lastDotIndex != -1 {
+		typestr = typestr[lastDotIndex+1:]
+	}
+
+	return
 }

@@ -22,6 +22,14 @@ func TestType2StructName(t *testing.T) {
 	if a != b {
 		t.Fatalf("test TestType2StructName, unexpected error: %v != %v", a, b)
 	}
+
+	e := &Engine{}
+	x := getTypeName(e)
+	y := "Engine"
+
+	if x != y {
+		t.Fatalf("test TestType2StructName, unexpected error: %v != %v", x, y)
+	}
 }
 
 func TestSession_Where(t *testing.T) {
