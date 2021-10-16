@@ -47,3 +47,31 @@ func TestStatement_OrderBy(t *testing.T) {
 		t.Fatalf("test TestStatement_OrderBy, unexpected error: %v != %v", s.OrderStr, "ab")
 	}
 }
+
+func TestStatement_genSelectSql(t *testing.T) {
+	table := &Table{
+		Columns: map[string]Column{
+			"name": Column{Name: "name", IsPrimaryKey: true},
+			"age":  Column{Name: "age"},
+		},
+		PrimaryKey: "name",
+		Name:       "student",
+	}
+
+	s := &Statement{
+		Session: &Session{
+			Engine: &Engine{
+				Protocol: "mssql",
+			},
+		},
+		Table:     table,
+		OffsetStr: 10,
+		LimitStr:  100,
+	}
+
+	got := s.genSelectSql("col-a")
+	want := "select col-a from (select ROW_NUMBER() OVER(order by name )as rownum,col-a from student) as a where rownum between 10 and 100"
+	if got != want {
+		t.Fatalf("test TestStatement_genSelectSql, unexpected error: %v != %v", got, want)
+	}
+}
