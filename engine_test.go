@@ -192,3 +192,48 @@ func TestEngine_genCreateSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_genDropSQL(t *testing.T) {
+	e := Engine{
+		AutoIncrement: "engine-autoinc",
+	}
+	var tests = []struct {
+		desc string
+		s    *Table
+		want string
+	}{
+		{
+			desc: "test genDropSQL",
+			s: &Table{
+				Columns: map[string]Column{
+					"name": Column{
+						Name:         "name",
+						IsPrimaryKey: true,
+						Length:       22,
+					},
+					"age": Column{
+						SQLType:       Int,
+						Name:          "age",
+						Length:        123,
+						Nullable:      false,
+						Default:       "345",
+						IsUnique:      true,
+						AutoIncrement: true,
+					},
+				},
+				PrimaryKey: "name",
+				Name:       "student",
+			},
+			want: "DROP TABLE IF EXISTS `student`;",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := e.genDropSQL(tt.s)
+			if got != tt.want {
+				t.Fatalf("[%02d] test %q, unexpected error: %v != %v", i, tt.desc, tt.want, got)
+			}
+		})
+	}
+}

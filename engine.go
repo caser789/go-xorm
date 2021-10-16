@@ -174,3 +174,11 @@ func (e *Engine) genCreateSQL(table *Table) string {
 	}
 	return sql
 }
+
+func (e *Engine) genDropSQL(table *Table) string {
+	sql := "DROP TABLE IF EXISTS `" + table.Name + "`;"
+	if e.ShowSQL {
+		fmt.Println(sql)
+	}
+	return sql
+}
