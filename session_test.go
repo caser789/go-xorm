@@ -3,18 +3,25 @@ package xorm
 import (
 	"reflect"
 	"testing"
-	// "fmt"
 )
 
-func _TestSession_Where(t *testing.T) {
-	// session.AutoStatement().WhereStr ==  #name# = $1
-	// session.ParamIteration == 1
-	// session.AutoStatement().ParamStr == [1, 2, 3, 123]
+func TestType2StructName(t *testing.T) {
+	type User struct{}
+	u := &User{}
 
-	// session.AutoStatement().WhereStr ==  #name# = ?
-	// session.ParamIteration == 2
-	// session.AutoStatement().ParamStr == [1, 2, 3, 123]
+	got := Type2StructName(reflect.TypeOf(u))
+	want := "User"
 
+	if got != want {
+		t.Fatalf("test TestType2StructName, unexpected error: %v != %v", got, want)
+	}
+
+	a := StructName(u)
+	b := "User"
+
+	if a != b {
+		t.Fatalf("test TestType2StructName, unexpected error: %v != %v", a, b)
+	}
 }
 
 func TestSession_Where(t *testing.T) {

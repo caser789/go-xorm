@@ -3,6 +3,7 @@ package xorm
 import (
 	"database/sql"
 	"fmt"
+	"reflect"
 )
 
 type Session struct {
@@ -129,4 +130,16 @@ func (session *Session) Commit() {
 		sql := statement.generateSql()
 		session.Exec(sql)
 	}
+}
+
+func StructName(s interface{}) string {
+	v := reflect.TypeOf(s)
+	return Type2StructName(v)
+}
+
+func Type2StructName(v reflect.Type) string {
+	for v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	return v.Name()
 }
