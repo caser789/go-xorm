@@ -1,13 +1,10 @@
-// Copyright 2013 The XORM Authors. All rights reserved.
-// Use of this source code is governed by a BSD
-// license that can be found in the LICENSE file.
-
-// Package xorm provides is a simple and powerful ORM for Go. It makes your
-// database operation simple.
-
 package xorm
 
 type sqlite3 struct {
+}
+
+func (db *sqlite3) Init(uri string) error {
+	return nil
 }
 
 func (db *sqlite3) SqlType(c *Column) string {
@@ -56,4 +53,19 @@ func (db *sqlite3) SupportCharset() bool {
 
 func (db *sqlite3) IndexOnTable() bool {
 	return false
+}
+
+func (db *sqlite3) IndexCheckSql(tableName, idxName string) (string, []interface{}) {
+	args := []interface{}{idxName}
+	return "SELECT name FROM sqlite_master WHERE type='index' and name = ?", args
+}
+
+func (db *sqlite3) TableCheckSql(tableName string) (string, []interface{}) {
+	args := []interface{}{tableName}
+	return "SELECT name FROM sqlite_master WHERE type='table' and name = ?", args
+}
+
+func (db *sqlite3) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
+	args := []interface{}{tableName}
+	return "SELECT name FROM sqlite_master WHERE type='table' and name = ? and sql like '%`" + colName + "`%'", args
 }
