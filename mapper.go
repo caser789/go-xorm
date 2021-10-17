@@ -1,15 +1,14 @@
 package xorm
 
+import (
+//"reflect"
+//"strings"
+)
+
+// name translation between struct, fields names and table, column names
 type IMapper interface {
 	Obj2Table(string) string
 	Table2Obj(string) string
-}
-
-type SnakeMapper struct{}
-
-// Table2Obj converts snake-case name to title-case
-func (mapper SnakeMapper) Table2Obj(name string) string {
-	return titleCasedName(name)
 }
 
 type SameMapper struct {
@@ -23,37 +22,10 @@ func (m SameMapper) Table2Obj(t string) string {
 	return t
 }
 
-// Obj2Table converts title-case name to snake-case
-func (mapper SnakeMapper) Obj2Table(name string) string {
-	return snakeCaseName(name)
+type SnakeMapper struct {
 }
 
-// snakeCase to titleCase
-// ab_cd_ef -> AbCdEf
-// doesn't work for words start with _
-func titleCasedName(name string) string {
-	newStr := make([]rune, 0)
-	upNextChar := true
-
-	for _, chr := range name {
-		switch {
-		case upNextChar:
-			upNextChar = false
-			chr -= ('a' - 'A')
-		case chr == '_':
-			upNextChar = true
-			continue
-		}
-
-		newStr = append(newStr, chr)
-	}
-
-	return string(newStr)
-}
-
-// titleCase to snakeCase
-// AbCdEf -> ab_cd_ef
-func snakeCaseName(name string) string {
+func snakeCasedName(name string) string {
 	newstr := make([]rune, 0)
 	firstTime := true
 
@@ -72,7 +44,7 @@ func snakeCaseName(name string) string {
 	return string(newstr)
 }
 
-func Pascal2Sql(s string) (d string) {
+func pascal2Sql(s string) (d string) {
 	d = ""
 	lastIdx := 0
 	for i := 0; i < len(s); i++ {
@@ -89,4 +61,32 @@ func Pascal2Sql(s string) (d string) {
 	}
 	d += s[lastIdx+1:]
 	return
+}
+
+func (mapper SnakeMapper) Obj2Table(name string) string {
+	return snakeCasedName(name)
+}
+
+func titleCasedName(name string) string {
+	newstr := make([]rune, 0)
+	upNextChar := true
+
+	for _, chr := range name {
+		switch {
+		case upNextChar:
+			upNextChar = false
+			chr -= ('a' - 'A')
+		case chr == '_':
+			upNextChar = true
+			continue
+		}
+
+		newstr = append(newstr, chr)
+	}
+
+	return string(newstr)
+}
+
+func (mapper SnakeMapper) Table2Obj(name string) string {
+	return titleCasedName(name)
 }
