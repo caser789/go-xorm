@@ -12,6 +12,17 @@ func (mapper SnakeMapper) Table2Obj(name string) string {
 	return titleCasedName(name)
 }
 
+type SameMapper struct {
+}
+
+func (m SameMapper) Obj2Table(o string) string {
+	return o
+}
+
+func (m SameMapper) Table2Obj(t string) string {
+	return t
+}
+
 // Obj2Table converts title-case name to snake-case
 func (mapper SnakeMapper) Obj2Table(name string) string {
 	return snakeCaseName(name)
