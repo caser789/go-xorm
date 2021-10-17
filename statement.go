@@ -31,6 +31,9 @@ type Statement struct {
 	RawSQL       string
 	RawParams    []interface{}
 	UseCascade   bool
+	UseAutoJoin  bool
+	StoreEngine  string
+	Charset      string
 	BeanArgs     []interface{}
 }
 
@@ -96,13 +99,15 @@ func BuildConditions(engine *Engine, table *Table, bean interface{}) ([]string, 
 				if t.IsZero() {
 					continue
 				}
+			} else {
+				engine.AutoMapType(fieldValue.Type())
 			}
 		default:
 			continue
 		}
+
 		if table, ok := engine.Tables[fieldValue.Type()]; ok {
 			pkField := reflect.Indirect(fieldValue).FieldByName(table.PKColumn().FieldName)
-			fmt.Println(pkField.Interface())
 			if pkField.Int() != 0 {
 				args = append(args, pkField.Interface())
 			} else {
@@ -140,7 +145,7 @@ func (statement *Statement) Id(id int64) {
 }
 
 func (statement *Statement) In(column string, args ...interface{}) {
-	inStr := fmt.Sprintf("%v in (%v)", column, strings.Join(MakeArray("?", len(args)), ","))
+	inStr := fmt.Sprintf("%v IN (%v)", column, strings.Join(MakeArray("?", len(args)), ","))
 	if statement.WhereStr == "" {
 		statement.WhereStr = inStr
 		statement.Params = args
@@ -197,9 +202,9 @@ func (statement *Statement) genColumnStr(col *Column) string {
 		sql += "NOT NULL "
 	}
 
-	if col.IsUnique {
-		sql += "Unique "
-	}
+	/*if col.UniqueType == SINGLEUNIQUE {
+		sql += "UNIQUE "
+	}*/
 
 	if col.Default != "" {
 		sql += "DEFAULT " + col.Default + " "
@@ -225,7 +230,32 @@ func (statement *Statement) genCreateSQL() string {
 		sql = strings.TrimSpace(sql)
 		sql += ", "
 	}
-	sql = sql[:len(sql)-2] + ");"
+	sql = sql[:len(sql)-2] + ")"
+	if statement.StoreEngine != "" {
+		sql += " ENGINE=" + statement.StoreEngine
+	}
+	if statement.Charset != "" {
+		sql += " DEFAULT CHARSET " + statement.Charset
+	}
+	sql += ";"
+	return sql
+}
+
+func (statement *Statement) genIndexSQL() string {
+	var sql string = ""
+	for indexName, cols := range statement.RefTable.Indexes {
+		sql += fmt.Sprintf("CREATE INDEX IF NOT EXISTS IDX_%v_%v ON %v (%v);", statement.TableName(), indexName,
+			statement.TableName(), strings.Join(cols, ","))
+	}
+	return sql
+}
+
+func (statement *Statement) genUniqueSQL() string {
+	var sql string = ""
+	for indexName, cols := range statement.RefTable.Uniques {
+		sql += fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS UQE_%v_%v ON %v (%v);", statement.TableName(), indexName,
+			statement.TableName(), strings.Join(cols, ","))
+	}
 	return sql
 }
 

@@ -1,3 +1,10 @@
+// Copyright 2013 The XORM Authors. All rights reserved.
+// Use of this source code is governed by a BSD
+// license that can be found in the LICENSE file.
+
+// Package xorm provides is a simple and powerful ORM for Go. It makes your
+// database operation simple.
+
 package xorm
 
 import (
@@ -70,6 +77,18 @@ const (
 	ONLYFROMDB
 )
 
+const (
+	NONEINDEX = iota
+	SINGLEINDEX
+	UNIONINDEX
+)
+
+const (
+	NONEUNIQUE = iota
+	SINGLEUNIQUE
+	UNIONUNIQUE
+)
+
 type Column struct {
 	Name            string
 	FieldName       string
@@ -78,7 +97,10 @@ type Column struct {
 	Length2         int
 	Nullable        bool
 	Default         string
-	IsUnique        bool
+	UniqueType      int
+	UniqueName      string
+	IndexType       int
+	IndexName       string
 	IsPrimaryKey    bool
 	IsAutoIncrement bool
 	MapType         int
@@ -88,6 +110,8 @@ type Table struct {
 	Name       string
 	Type       reflect.Type
 	Columns    map[string]Column
+	Indexes    map[string][]string
+	Uniques    map[string][]string
 	PrimaryKey string
 }
 

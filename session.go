@@ -79,6 +79,16 @@ func (session *Session) OrderBy(order string) *Session {
 	return session
 }
 
+func (session *Session) StoreEngine(storeEngine string) *Session {
+	session.Statement.StoreEngine = storeEngine
+	return session
+}
+
+func (session *Session) Charset(charset string) *Session {
+	session.Statement.Charset = charset
+	return session
+}
+
 func (session *Session) Cascade(trueOrFalse ...bool) *Session {
 	if len(trueOrFalse) >= 1 {
 		session.Statement.UseCascade = trueOrFalse[0]
@@ -164,6 +174,9 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 	table := session.Engine.Tables[Type(obj)]
 
 	for key, data := range objMap {
+		if _, ok := table.Columns[key]; !ok {
+			continue
+		}
 		fieldName := table.Columns[key].FieldName
 		fieldPath := strings.Split(fieldName, ".")
 		var structField reflect.Value
@@ -316,12 +329,33 @@ func (session *Session) Exec(sql string, args ...interface{}) (sql.Result, error
 	return session.Tx.Exec(sql, args...)
 }
 
+// this function create a table according a bean
 func (session *Session) CreateTable(bean interface{}) error {
 	statement := session.Statement
 	defer statement.Init()
 	statement.RefTable = session.Engine.AutoMap(bean)
 	sql := statement.genCreateSQL()
-	_, err := session.Exec(sql)
+	res, err := session.Exec(sql)
+	if err != nil {
+		return err
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		sql = statement.genIndexSQL()
+		if len(sql) > 0 {
+			_, err = session.Exec(sql)
+		}
+	}
+	if err == nil && affected > 0 {
+		sql = statement.genUniqueSQL()
+		if len(sql) > 0 {
+			_, err = session.Exec(sql)
+		}
+	}
 	return err
 }
 
@@ -338,22 +372,24 @@ func (session *Session) Get(bean interface{}) (bool, error) {
 		args = statement.RawParams
 	}
 	resultsSlice, err := session.Query(sql, args...)
-
 	if err != nil {
 		return false, err
 	}
-	if len(resultsSlice) == 0 {
+	if len(resultsSlice) < 1 {
 		return false, nil
-	} else if len(resultsSlice) == 1 {
-		results := resultsSlice[0]
-		err := session.scanMapIntoStruct(bean, results)
-		if err != nil {
-			return false, err
-		}
-	} else {
-		return false, errors.New("More than one record")
 	}
-	return true, nil
+
+	results := resultsSlice[0]
+	session.Engine.AutoMap(bean)
+	err = session.scanMapIntoStruct(bean, results)
+	if err != nil {
+		return false, err
+	}
+	if len(resultsSlice) == 1 {
+		return true, nil
+	} else {
+		return true, errors.New("More than one record")
+	}
 }
 
 func (session *Session) Count(bean interface{}) (int64, error) {
@@ -487,6 +523,7 @@ func (session *Session) Query(sql string, paramStr ...interface{}) (resultsSlice
 		defer session.Close()
 	}
 
+	// TODO: this statement should be invoke before Query
 	if session.Statement.RefTable != nil && session.Statement.RefTable.PrimaryKey != "" {
 		sql = strings.Replace(sql, "(id)", session.Statement.RefTable.PrimaryKey, -1)
 	}
@@ -552,6 +589,8 @@ func (session *Session) Query(sql string, paramStr ...interface{}) (resultsSlice
 				if aa.String() == "time.Time" {
 					str = rawValue.Interface().(time.Time).Format("2006-01-02 15:04:05.000 -0700")
 					result[key] = []byte(str)
+				} else {
+					fmt.Print("Unsupported struct type")
 				}
 			}
 			//default:
@@ -582,7 +621,11 @@ func (session *Session) Insert(beans ...interface{}) (int64, error) {
 				lastId, err = session.InsertMulti(bean)
 				if err != nil {
 					if !isInTransaction {
-						err = session.Rollback()
+						err1 := session.Rollback()
+						if err1 == nil {
+							return lastId, err
+						}
+						err = err1
 					}
 					return lastId, err
 				}
@@ -592,7 +635,11 @@ func (session *Session) Insert(beans ...interface{}) (int64, error) {
 					lastId, err = session.InsertOne(sliceValue.Index(i).Interface())
 					if err != nil {
 						if !isInTransaction {
-							err = session.Rollback()
+							err1 := session.Rollback()
+							if err1 == nil {
+								return lastId, err
+							}
+							err = err1
 						}
 						return lastId, err
 					}
@@ -602,7 +649,11 @@ func (session *Session) Insert(beans ...interface{}) (int64, error) {
 			lastId, err = session.InsertOne(bean)
 			if err != nil {
 				if !isInTransaction {
-					err = session.Rollback()
+					err1 := session.Rollback()
+					if err1 == nil {
+						return lastId, err
+					}
+					err = err1
 				}
 				return lastId, err
 			}
@@ -717,24 +768,32 @@ func (session *Session) InsertOne(bean interface{}) (int64, error) {
 		if col.MapType == ONLYFROMDB {
 			continue
 		}
-		if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
-			if fieldTable.PrimaryKey != "" {
-				pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumn().FieldName)
-				args = append(args, pkField.Interface())
-			} else {
-				continue
-			}
-		} else if fieldValue.Type().Kind() == reflect.Struct &&
-			fieldValue.CanAddr() {
-			if fieldConvert, ok := fieldValue.Addr().Interface().(Conversion); ok {
-				data, err := fieldConvert.ToDB()
-				if err != nil {
-					return 0, err
+		if fieldValue.Type().String() == "time.Time" {
+			args = append(args, val)
+		} else if fieldValue.Type().Kind() == reflect.Struct {
+			if fieldValue.CanAddr() {
+				if fieldConvert, ok := fieldValue.Addr().Interface().(Conversion); ok {
+					data, err := fieldConvert.ToDB()
+					if err != nil {
+						return 0, err
+					} else {
+						args = append(args, string(data))
+					}
 				} else {
-					args = append(args, string(data))
+					if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
+						if fieldTable.PrimaryKey != "" {
+							pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumn().FieldName)
+							args = append(args, pkField.Interface())
+						} else {
+							continue
+						}
+					} else {
+						//args = append(args, val)
+						continue
+					}
 				}
 			} else {
-				args = append(args, val)
+				continue
 			}
 		} else {
 			args = append(args, val)
