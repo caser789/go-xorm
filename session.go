@@ -1,10 +1,3 @@
-// Copyright 2013 The XORM Authors. All rights reserved.
-// Use of this source code is governed by a BSD
-// license that can be found in the LICENSE file.
-
-// Package xorm provides is a simple and powerful ORM for Go. It makes your
-// database operation simple.
-
 package xorm
 
 import (
@@ -25,6 +18,7 @@ type Session struct {
 	IsAutoCommit           bool
 	IsCommitedOrRollbacked bool
 	TransType              string
+	IsAutoClose            bool
 }
 
 func (session *Session) Init() {
@@ -32,6 +26,7 @@ func (session *Session) Init() {
 	session.Statement.Init()
 	session.IsAutoCommit = true
 	session.IsCommitedOrRollbacked = false
+	session.IsAutoClose = false
 }
 
 func (session *Session) Close() {
@@ -40,7 +35,7 @@ func (session *Session) Close() {
 			session.Engine.Pool.ReleaseDB(session.Engine, session.Db)
 			session.Db = nil
 			session.Tx = nil
-			session.Init()
+			//session.Init()
 		}
 	}()
 }
@@ -87,6 +82,22 @@ func (session *Session) Limit(limit int, start ...int) *Session {
 
 func (session *Session) OrderBy(order string) *Session {
 	session.Statement.OrderBy(order)
+	return session
+}
+
+func (session *Session) Desc(colName string) *Session {
+	if session.Statement.OrderStr != "" {
+		session.Statement.OrderStr += ", "
+	}
+	session.Statement.OrderStr += colName + " desc"
+	return session
+}
+
+func (session *Session) Asc(colName string) *Session {
+	if session.Statement.OrderStr != "" {
+		session.Statement.OrderStr += ", "
+	}
+	session.Statement.OrderStr += colName + " asc"
 	return session
 }
 
@@ -391,6 +402,10 @@ func (session *Session) CreateAll() error {
 		return err
 	}
 
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+
 	for _, table := range session.Engine.Tables {
 		session.Statement.RefTable = table
 		err := session.createOneTable()
@@ -405,6 +420,10 @@ func (session *Session) DropTable(bean interface{}) error {
 	err := session.newDb()
 	if err != nil {
 		return err
+	}
+
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
 	t := reflect.Indirect(reflect.ValueOf(bean)).Type()
@@ -426,6 +445,10 @@ func (session *Session) Get(bean interface{}) (bool, error) {
 	err := session.newDb()
 	if err != nil {
 		return false, err
+	}
+
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
 	defer session.Statement.Init()
@@ -465,6 +488,10 @@ func (session *Session) Count(bean interface{}) (int64, error) {
 		return 0, err
 	}
 
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+
 	defer session.Statement.Init()
 	var sql string
 	var args []interface{}
@@ -496,6 +523,10 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 	err := session.newDb()
 	if err != nil {
 		return err
+	}
+
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
 	defer session.Statement.Init()
@@ -565,6 +596,10 @@ func (session *Session) Ping() error {
 		return err
 	}
 
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+
 	return session.Db.Ping()
 }
 
@@ -572,6 +607,10 @@ func (session *Session) DropAll() error {
 	err := session.newDb()
 	if err != nil {
 		return err
+	}
+
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
 	for _, table := range session.Engine.Tables {
@@ -590,6 +629,10 @@ func (session *Session) Query(sql string, paramStr ...interface{}) (resultsSlice
 	err = session.newDb()
 	if err != nil {
 		return nil, err
+	}
+
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
 	for _, filter := range session.Engine.Filters {
@@ -676,10 +719,14 @@ func (session *Session) Insert(beans ...interface{}) (int64, error) {
 
 	if !isInTransaction {
 		err = session.Begin()
-		defer session.Close()
+		//defer session.Close()
 		if err != nil {
 			return 0, err
 		}
+	}
+
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
 	for _, bean := range beans {
@@ -826,9 +873,10 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 
 func (session *Session) InsertMulti(rowsSlicePtr interface{}) (int64, error) {
 	err := session.newDb()
-	if session.IsAutoCommit {
+	if session.IsAutoClose {
 		defer session.Close()
 	}
+
 	if err != nil {
 		return 0, err
 	}
@@ -955,7 +1003,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 
 func (session *Session) InsertOne(bean interface{}) (int64, error) {
 	err := session.newDb()
-	if session.IsAutoCommit {
+	if session.IsAutoClose {
 		defer session.Close()
 	}
 	if err != nil {
@@ -967,7 +1015,7 @@ func (session *Session) InsertOne(bean interface{}) (int64, error) {
 
 func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int64, error) {
 	err := session.newDb()
-	if session.IsAutoCommit {
+	if session.IsAutoClose {
 		defer session.Close()
 	}
 	if err != nil {
@@ -1045,7 +1093,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 func (session *Session) Delete(bean interface{}) (int64, error) {
 	err := session.newDb()
-	if session.IsAutoCommit {
+	if session.IsAutoClose {
 		defer session.Close()
 	}
 	if err != nil {
