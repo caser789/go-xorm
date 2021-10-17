@@ -71,3 +71,7 @@ func (db *postgres) SupportEngine() bool {
 func (db *postgres) SupportCharset() bool {
 	return false
 }
+
+func (db *postgres) IndexOnTable() bool {
+	return false
+}
