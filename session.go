@@ -60,8 +60,8 @@ func (session *Session) Id(id int64) *Session {
 	return session
 }
 
-func (session *Session) Table(tableName string) *Session {
-	session.Statement.Table(tableName)
+func (session *Session) Table(tableNameOrBean interface{}) *Session {
+	session.Statement.Table(tableNameOrBean)
 	return session
 }
 
@@ -206,38 +206,54 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 		switch structField.Type().Kind() {
 		case reflect.Slice:
 			v = data
+			vv := reflect.ValueOf(v)
+			if structField.Type().String() == "[]byte" {
+				fmt.Println("...[]byte...")
+			}
+			if vv.Type().Kind() == reflect.Slice {
+				for i := 0; i < vv.Len(); i++ {
+					//vv.Index(i)
+					structField = reflect.AppendSlice(structField, vv)
+					//reflect.Append(structField, vv.Index(i))
+				}
+			} else {
+				return errors.New(fmt.Sprintf("unsupported from other %v to %v", vv.Type().Kind(), structField.Type().Kind()))
+			}
 		case reflect.Array:
 			if structField.Type().Elem() == reflect.TypeOf(b) {
 				v = data
+				structField.Set(reflect.ValueOf(v))
 			}
 		case reflect.String:
-			v = string(data)
+			x := string(data)
+			structField.SetString(x)
 		case reflect.Bool:
 			v = (string(data) == "1")
+			structField.Set(reflect.ValueOf(v))
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
 			x, err := strconv.Atoi(string(data))
 			if err != nil {
 				return errors.New("arg " + key + " as int: " + err.Error())
 			}
-			v = x
+			structField.SetInt(int64(x))
 		case reflect.Int64:
 			x, err := strconv.ParseInt(string(data), 10, 64)
 			if err != nil {
 				return errors.New("arg " + key + " as int: " + err.Error())
 			}
-			v = x
+			structField.SetInt(x)
 		case reflect.Float32, reflect.Float64:
 			x, err := strconv.ParseFloat(string(data), 64)
 			if err != nil {
 				return errors.New("arg " + key + " as float64: " + err.Error())
 			}
-			v = x
-		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			structField.SetFloat(x)
+		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
 			x, err := strconv.ParseUint(string(data), 10, 64)
 			if err != nil {
 				return errors.New("arg " + key + " as int: " + err.Error())
 			}
-			v = x
+			structField.SetUint(x)
 		//Now only support Time type
 		case reflect.Struct:
 			if structField.Type().String() == "time.Time" {
@@ -251,6 +267,7 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 				}
 
 				v = x
+				structField.Set(reflect.ValueOf(v))
 			} else if structConvert, ok := structField.Addr().Interface().(Conversion); ok {
 				err := structConvert.FromDB(data)
 				if err != nil {
@@ -274,6 +291,7 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 						}
 						if has {
 							v = structInter.Elem().Interface()
+							structField.Set(reflect.ValueOf(v))
 						} else {
 							session.Engine.LogError("cascade obj is not exist!")
 							continue
@@ -292,7 +310,6 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 			return errors.New("unsupported type in Scan: " + reflect.TypeOf(v).String())
 		}
 
-		structField.Set(reflect.ValueOf(v))
 	}
 
 	return nil
@@ -733,7 +750,7 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 	colNames := make([]string, 0)
 	colMultiPlaces := make([]string, 0)
 	var args = make([]interface{}, 0)
-	cols := make([]Column, 0)
+	cols := make([]*Column, 0)
 
 	for i := 0; i < size; i++ {
 		elemValue := sliceValue.Index(i).Interface()
@@ -820,6 +837,17 @@ func (session *Session) InsertMulti(rowsSlicePtr interface{}) (int64, error) {
 }
 
 func (session *Session) value2Interface(fieldValue reflect.Value) (interface{}, error) {
+	if fieldValue.CanAddr() {
+		if fieldConvert, ok := fieldValue.Addr().Interface().(Conversion); ok {
+			data, err := fieldConvert.ToDB()
+			if err != nil {
+				return 0, err
+			} else {
+				return string(data), nil
+			}
+		}
+	}
+
 	if fieldValue.Type().Kind() == reflect.Bool {
 		if fieldValue.Bool() {
 			return 1, nil
@@ -829,17 +857,6 @@ func (session *Session) value2Interface(fieldValue reflect.Value) (interface{}, 
 	} else if fieldValue.Type().String() == "time.Time" {
 		return fieldValue.Interface(), nil
 	} else if fieldValue.Type().Kind() == reflect.Struct {
-		if fieldValue.CanAddr() {
-			if fieldConvert, ok := fieldValue.Addr().Interface().(Conversion); ok {
-				data, err := fieldConvert.ToDB()
-				if err != nil {
-					return 0, err
-				} else {
-					return string(data), nil
-				}
-			}
-		}
-
 		if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
 			if fieldTable.PrimaryKey != "" {
 				pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumn().FieldName)
@@ -850,6 +867,11 @@ func (session *Session) value2Interface(fieldValue reflect.Value) (interface{}, 
 		} else {
 			return 0, errors.New(fmt.Sprintf("Unsupported type %v", fieldValue.Type()))
 		}
+	} else if fieldValue.Type().Kind() == reflect.Array ||
+		fieldValue.Type().Kind() == reflect.Slice {
+		data := fmt.Sprintf("%v", fieldValue.Interface())
+		//fmt.Println(data, "--------")
+		return data, nil
 	} else {
 		return fieldValue.Interface(), nil
 	}
@@ -864,13 +886,15 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 	var args = make([]interface{}, 0)
 
 	for _, col := range table.Columns {
-		fieldValue := reflect.Indirect(reflect.ValueOf(bean)).FieldByName(col.FieldName)
-		if col.IsAutoIncrement && fieldValue.Int() == 0 {
-			continue
-		}
 		if col.MapType == ONLYFROMDB {
 			continue
 		}
+
+		fieldValue := col.ValueOf(bean)
+		if col.IsAutoIncrement && fieldValue.Int() == 0 {
+			continue
+		}
+
 		if session.Statement.ColumnStr != "" {
 			if _, ok := session.Statement.columnMap[col.Name]; !ok {
 				continue
@@ -906,8 +930,8 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 	}
 
 	var id int64 = 0
-	pkValue := reflect.Indirect(reflect.ValueOf(bean)).FieldByName(table.PKColumn().FieldName)
-	if pkValue.Int() != 0 || !pkValue.CanSet() {
+	pkValue := table.PKColumn().ValueOf(bean)
+	if !pkValue.IsValid() || pkValue.Int() != 0 || !pkValue.CanSet() {
 		return 0, nil
 	}
 
@@ -950,14 +974,37 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		return 0, err
 	}
 
-	table := session.Engine.AutoMap(bean)
-	session.Statement.RefTable = table
-	colNames, args := BuildConditions(session.Engine, table, bean)
+	t := Type(bean)
+
+	var colNames []string
+	var args []interface{}
+
+	if t.Kind() == reflect.Struct {
+		table := session.Engine.AutoMap(bean)
+		session.Statement.RefTable = table
+		colNames, args = BuildConditions(session.Engine, table, bean)
+	} else if t.Kind() == reflect.Map {
+		if session.Statement.RefTable == nil {
+			return -1, TableNotFoundError
+		}
+		colNames = make([]string, 0)
+		args = make([]interface{}, 0)
+		bValue := reflect.ValueOf(bean)
+
+		for _, v := range bValue.MapKeys() {
+			colNames = append(colNames, session.Engine.Quote(v.String())+" = ?")
+			args = append(args, bValue.MapIndex(v).Interface())
+		}
+
+	} else {
+		return -1, ParamsTypeError
+	}
+
 	var condiColNames []string
 	var condiArgs []interface{}
 
 	if len(condiBean) > 0 {
-		condiColNames, condiArgs = BuildConditions(session.Engine, table, condiBean[0])
+		condiColNames, condiArgs = BuildConditions(session.Engine, session.Statement.RefTable, condiBean[0])
 	}
 
 	var condition = ""

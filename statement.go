@@ -77,15 +77,20 @@ func (statement *Statement) Where(querystring string, args ...interface{}) {
 	statement.Params = args
 }
 
-func (statement *Statement) Table(tableName string) {
-	statement.AltTableName = tableName
+func (statement *Statement) Table(tableNameOrBean interface{}) {
+	t := Type(tableNameOrBean)
+	if t.Kind() == reflect.String {
+		statement.AltTableName = tableNameOrBean.(string)
+	} else if t.Kind() == reflect.Struct {
+		statement.RefTable = statement.Engine.AutoMapType(t)
+	}
 }
 
 func BuildConditions(engine *Engine, table *Table, bean interface{}) ([]string, []interface{}) {
 	colNames := make([]string, 0)
 	var args = make([]interface{}, 0)
 	for _, col := range table.Columns {
-		fieldValue := reflect.Indirect(reflect.ValueOf(bean)).FieldByName(col.FieldName)
+		fieldValue := col.ValueOf(bean)
 		fieldType := reflect.TypeOf(fieldValue.Interface())
 		val := fieldValue.Interface()
 		switch fieldType.Kind() {
@@ -93,8 +98,16 @@ func BuildConditions(engine *Engine, table *Table, bean interface{}) ([]string, 
 			if fieldValue.String() == "" {
 				continue
 			}
-		case reflect.Int, reflect.Int32, reflect.Int64:
+		case reflect.Int8, reflect.Int16, reflect.Int, reflect.Int32, reflect.Int64:
 			if fieldValue.Int() == 0 {
+				continue
+			}
+		case reflect.Float32, reflect.Float64:
+			if fieldValue.Float() == 0.0 {
+				continue
+			}
+		case reflect.Uint8, reflect.Uint16, reflect.Uint, reflect.Uint32, reflect.Uint64:
+			if fieldValue.Uint() == 0 {
 				continue
 			}
 		case reflect.Struct:
