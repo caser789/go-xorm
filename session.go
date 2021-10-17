@@ -26,7 +26,11 @@ func (session *Session) Init() {
 }
 
 func (session *Session) Close() {
-	defer session.Db.Close()
+	defer func() {
+		if session.Db != nil {
+			session.Db.Close()
+		}
+	}()
 }
 
 func (session *Session) Where(querystring string, args ...interface{}) *Session {
@@ -84,14 +88,16 @@ func (session *Session) Having(conditions string) *Session {
 
 func (session *Session) Begin() error {
 	if session.IsAutoCommit {
+		tx, err := session.Db.Begin()
+		if err != nil {
+			return err
+		}
 		session.IsAutoCommit = false
 		session.IsCommitedOrRollbacked = false
-		tx, err := session.Db.Begin()
 		session.Tx = tx
 		if session.Engine.ShowSQL {
 			fmt.Println("BEGIN TRANSACTION")
 		}
-		return err
 	}
 	return nil
 }
