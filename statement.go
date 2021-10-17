@@ -1,10 +1,3 @@
-// Copyright 2013 The XORM Authors. All rights reserved.
-// Use of this source code is governed by a BSD
-// license that can be found in the LICENSE file.
-
-// Package xorm provides is a simple and powerful ORM for Go. It makes your
-// database operation simple.
-
 package xorm
 
 import (
@@ -219,7 +212,8 @@ func (statement *Statement) genColumnStr() string {
 
 func (statement *Statement) genCreateSQL() string {
 	sql := "CREATE TABLE IF NOT EXISTS " + statement.Engine.Quote(statement.TableName()) + " ("
-	for _, col := range statement.RefTable.Columns {
+	for _, colName := range statement.RefTable.ColumnsSeq {
+		col := statement.RefTable.Columns[colName]
 		sql += col.String(statement.Engine)
 		sql = strings.TrimSpace(sql)
 		sql += ", "
