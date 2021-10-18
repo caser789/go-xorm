@@ -233,16 +233,11 @@ func (statement *Statement) Table(tableNameOrBean interface{}) *Statement {
 }*/
 
 // Auto generating conditions according a struct
-func buildConditions(engine *Engine, table *Table, bean interface{},
-	includeVersion bool, includeUpdated bool, allUseBool bool,
-	boolColumnMap map[string]bool) ([]string, []interface{}) {
+func buildConditions(engine *Engine, table *Table, bean interface{}, includeVersion bool, allUseBool bool, boolColumnMap map[string]bool) ([]string, []interface{}) {
 	colNames := make([]string, 0)
 	var args = make([]interface{}, 0)
 	for _, col := range table.Columns {
 		if !includeVersion && col.IsVersion {
-			continue
-		}
-		if !includeUpdated && col.IsUpdated {
 			continue
 		}
 		fieldValue := col.ValueOf(bean)
@@ -347,6 +342,10 @@ func buildConditions(engine *Engine, table *Table, bean interface{},
 					val = bytes
 				}
 			} else {
+				continue
+			}
+		case reflect.Ptr:
+			if fieldValue.IsNil() || !fieldValue.IsValid() {
 				continue
 			}
 		default:
@@ -591,7 +590,7 @@ func (statement Statement) genGetSql(bean interface{}) (string, []interface{}) {
 	table := statement.Engine.autoMap(bean)
 	statement.RefTable = table
 
-	colNames, args := buildConditions(statement.Engine, table, bean, true, true,
+	colNames, args := buildConditions(statement.Engine, table, bean, true,
 		statement.allUseBool, statement.boolColumnMap)
 	statement.ConditionStr = strings.Join(colNames, " AND ")
 	statement.BeanArgs = args
@@ -629,7 +628,7 @@ func (statement Statement) genCountSql(bean interface{}) (string, []interface{})
 	table := statement.Engine.autoMap(bean)
 	statement.RefTable = table
 
-	colNames, args := buildConditions(statement.Engine, table, bean, true, true, statement.allUseBool, statement.boolColumnMap)
+	colNames, args := buildConditions(statement.Engine, table, bean, true, statement.allUseBool, statement.boolColumnMap)
 	statement.ConditionStr = strings.Join(colNames, " AND ")
 	statement.BeanArgs = args
 	var id string = "*"
