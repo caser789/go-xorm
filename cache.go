@@ -11,7 +11,9 @@ import (
 )
 
 const (
-	CacheExpired   = 60 * time.Minute
+	// default cache expired time
+	CacheExpired = 60 * time.Minute
+	// not use now
 	CacheMaxMemory = 256
 	// evey ten minutes to clear all expired nodes
 	CacheGcInterval = 10 * time.Minute
@@ -19,12 +21,15 @@ const (
 	CacheGcMaxRemoved = 20
 )
 
+// CacheStore is a interface to store cache
 type CacheStore interface {
 	Put(key, value interface{}) error
 	Get(key interface{}) (interface{}, error)
 	Del(key interface{}) error
 }
 
+// MemoryStore implements CacheStore provide local machine
+// memory store
 type MemoryStore struct {
 	store map[interface{}]interface{}
 	mutex sync.RWMutex
@@ -58,6 +63,7 @@ func (s *MemoryStore) Del(key interface{}) error {
 	return nil
 }
 
+// Cacher is an interface to provide cache
 type Cacher interface {
 	GetIds(tableName, sql string) interface{}
 	GetBean(tableName string, id int64) interface{}
@@ -122,9 +128,9 @@ func NewLRUCacher2(store CacheStore, expired time.Duration, max int) *LRUCacher 
 	return newLRUCacher(store, expired, 0, max)
 }
 
-func NewLRUCacher3(store CacheStore, expired time.Duration, maxSize int) *LRUCacher {
-	return newLRUCacher(store, expired, maxSize, 0)
-}
+//func NewLRUCacher3(store CacheStore, expired time.Duration, maxSize int) *LRUCacher {
+//	return newLRUCacher(store, expired, maxSize, 0)
+//}
 
 // RunGC run once every m.GcInterval
 func (m *LRUCacher) RunGC() {
@@ -136,6 +142,8 @@ func (m *LRUCacher) RunGC() {
 
 // GC check ids lit and sql list to remove all element expired
 func (m *LRUCacher) GC() {
+	//fmt.Println("begin gc ...")
+	//defer fmt.Println("end gc ...")
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	var removedNum int
@@ -149,10 +157,12 @@ func (m *LRUCacher) GC() {
 			m.delBean(node.tbName, node.id)
 			e = next
 		} else {
+			//fmt.Printf("removing %d cache nodes ..., left %d\n", removedNum, m.idList.Len())
 			break
 		}
 	}
 
+	removedNum = 0
 	for e := m.sqlList.Front(); e != nil; {
 		if removedNum <= CacheGcMaxRemoved &&
 			time.Now().Sub(e.Value.(*sqlNode).lastVisit) > m.Expired {
@@ -160,9 +170,10 @@ func (m *LRUCacher) GC() {
 			next := e.Next()
 			//fmt.Println("removing ...", e.Value)
 			node := e.Value.(*sqlNode)
-			m.DelIds(node.tbName, node.sql)
+			m.delIds(node.tbName, node.sql)
 			e = next
 		} else {
+			//fmt.Printf("removing %d cache nodes ..., left %d\n", removedNum, m.sqlList.Len())
 			break
 		}
 	}
@@ -322,8 +333,8 @@ func (m *LRUCacher) DelIds(tableName, sql string) {
 
 func (m *LRUCacher) delBean(tableName string, id int64) {
 	tid := genId(tableName, id)
-	if el, ok := m.idIndex[tableName][tid]; ok {
-		delete(m.idIndex[tableName], tid)
+	if el, ok := m.idIndex[tableName][id]; ok {
+		delete(m.idIndex[tableName], id)
 		m.idList.Remove(el)
 		m.clearIds(tableName)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// statement save all the sql info for executing SQL
 type Statement struct {
 	RefTable      *Table
 	Engine        *Engine
@@ -39,6 +40,7 @@ type Statement struct {
 	boolColumnMap map[string]bool
 }
 
+// init
 func (statement *Statement) Init() {
 	statement.RefTable = nil
 	statement.Start = 0
@@ -65,41 +67,51 @@ func (statement *Statement) Init() {
 	statement.boolColumnMap = make(map[string]bool)
 }
 
-func (statement *Statement) Sql(querystring string, args ...interface{}) {
+// add the raw sql statement
+func (statement *Statement) Sql(querystring string, args ...interface{}) *Statement {
 	statement.RawSQL = querystring
 	statement.RawParams = args
+	return statement
 }
 
-func (statement *Statement) Where(querystring string, args ...interface{}) {
+// add Where statment
+func (statement *Statement) Where(querystring string, args ...interface{}) *Statement {
 	statement.WhereStr = querystring
 	statement.Params = args
+	return statement
 }
 
-func (statement *Statement) And(querystring string, args ...interface{}) {
+// add Where & and statment
+func (statement *Statement) And(querystring string, args ...interface{}) *Statement {
 	if statement.WhereStr != "" {
 		statement.WhereStr = fmt.Sprintf("(%v) AND (%v)", statement.WhereStr, querystring)
 	} else {
 		statement.WhereStr = querystring
 	}
 	statement.Params = append(statement.Params, args...)
+	return statement
 }
 
-func (statement *Statement) Or(querystring string, args ...interface{}) {
+// add Where & Or statment
+func (statement *Statement) Or(querystring string, args ...interface{}) *Statement {
 	if statement.WhereStr != "" {
 		statement.WhereStr = fmt.Sprintf("(%v) OR (%v)", statement.WhereStr, querystring)
 	} else {
 		statement.WhereStr = querystring
 	}
 	statement.Params = append(statement.Params, args...)
+	return statement
 }
 
-func (statement *Statement) Table(tableNameOrBean interface{}) {
+// tempororily set table name
+func (statement *Statement) Table(tableNameOrBean interface{}) *Statement {
 	t := rType(tableNameOrBean)
 	if t.Kind() == reflect.String {
 		statement.AltTableName = tableNameOrBean.(string)
 	} else if t.Kind() == reflect.Struct {
-		statement.RefTable = statement.Engine.AutoMapType(t)
+		statement.RefTable = statement.Engine.autoMapType(t)
 	}
+	return statement
 }
 
 // Auto generating conditions according a struct
@@ -155,9 +167,18 @@ func buildConditions(engine *Engine, table *Table, bean interface{}, includeVers
 				if t.IsZero() {
 					continue
 				}
-				val = t
+				var str string
+				if col.SQLType.Name == Time {
+					s := t.UTC().Format("2006-01-02 15:04:05")
+					val = s[11:19]
+				} else if col.SQLType.Name == Date {
+					str = t.Format("2006-01-02")
+					val = str
+				} else {
+					val = t
+				}
 			} else {
-				engine.AutoMapType(fieldValue.Type())
+				engine.autoMapType(fieldValue.Type())
 				if table, ok := engine.Tables[fieldValue.Type()]; ok {
 					pkField := reflect.Indirect(fieldValue).FieldByName(table.PKColumn().FieldName)
 					if pkField.Int() != 0 {
@@ -189,7 +210,11 @@ func buildConditions(engine *Engine, table *Table, bean interface{}, includeVers
 				var err error
 				if (fieldType.Kind() == reflect.Array || fieldType.Kind() == reflect.Slice) &&
 					fieldType.Elem().Kind() == reflect.Uint8 {
-					val = fieldValue.Bytes()
+					if fieldValue.Len() > 0 {
+						val = fieldValue.Bytes()
+					} else {
+						continue
+					}
 				} else {
 					bytes, err = json.Marshal(fieldValue.Interface())
 					if err != nil {
@@ -212,6 +237,7 @@ func buildConditions(engine *Engine, table *Table, bean interface{}, includeVers
 	return colNames, args
 }
 
+// return current tableName
 func (statement *Statement) TableName() string {
 	if statement.AltTableName != "" {
 		return statement.AltTableName
@@ -223,7 +249,8 @@ func (statement *Statement) TableName() string {
 	return ""
 }
 
-func (statement *Statement) Id(id int64) {
+// Generate "Where id = ? " statment
+func (statement *Statement) Id(id int64) *Statement {
 	if statement.WhereStr == "" {
 		statement.WhereStr = "(id)=?"
 		statement.Params = []interface{}{id}
@@ -231,9 +258,11 @@ func (statement *Statement) Id(id int64) {
 		statement.WhereStr = statement.WhereStr + " AND (id)=?"
 		statement.Params = append(statement.Params, id)
 	}
+	return statement
 }
 
-func (statement *Statement) In(column string, args ...interface{}) {
+// Generate "Where column IN (?) " statment
+func (statement *Statement) In(column string, args ...interface{}) *Statement {
 	inStr := fmt.Sprintf("%v IN (%v)", column, strings.Join(makeArray("?", len(args)), ","))
 	if statement.WhereStr == "" {
 		statement.WhereStr = inStr
@@ -242,6 +271,7 @@ func (statement *Statement) In(column string, args ...interface{}) {
 		statement.WhereStr = statement.WhereStr + " AND " + inStr
 		statement.Params = append(statement.Params, args...)
 	}
+	return statement
 }
 
 func col2NewCols(columns ...string) []string {
@@ -257,20 +287,25 @@ func col2NewCols(columns ...string) []string {
 	return newColumns
 }
 
-func (statement *Statement) Distinct(columns ...string) {
+// Generate "Distince col1, col2 " statment
+func (statement *Statement) Distinct(columns ...string) *Statement {
 	statement.IsDistinct = true
 	statement.Cols(columns...)
+	return statement
 }
 
-func (statement *Statement) Cols(columns ...string) {
+// Generate "col1, col2" statement
+func (statement *Statement) Cols(columns ...string) *Statement {
 	newColumns := col2NewCols(columns...)
 	for _, nc := range newColumns {
 		statement.columnMap[nc] = true
 	}
 	statement.ColumnStr = statement.Engine.Quote(strings.Join(newColumns, statement.Engine.Quote(", ")))
+	return statement
 }
 
-func (statement *Statement) UseBool(columns ...string) {
+// indicates that use bool fields as update contents and query contiditions
+func (statement *Statement) UseBool(columns ...string) *Statement {
 	if len(columns) > 0 {
 		newColumns := col2NewCols(columns...)
 		for _, nc := range newColumns {
@@ -279,8 +314,10 @@ func (statement *Statement) UseBool(columns ...string) {
 	} else {
 		statement.allUseBool = true
 	}
+	return statement
 }
 
+// do not use the columns
 func (statement *Statement) Omit(columns ...string) {
 	newColumns := col2NewCols(columns...)
 	for _, nc := range newColumns {
@@ -289,32 +326,47 @@ func (statement *Statement) Omit(columns ...string) {
 	statement.OmitStr = statement.Engine.Quote(strings.Join(newColumns, statement.Engine.Quote(", ")))
 }
 
-func (statement *Statement) Limit(limit int, start ...int) {
+// Generate LIMIT limit statement
+func (statement *Statement) Top(limit int) *Statement {
+	statement.Limit(limit)
+	return statement
+}
+
+// Generate LIMIT start, limit statement
+func (statement *Statement) Limit(limit int, start ...int) *Statement {
 	statement.LimitN = limit
 	if len(start) > 0 {
 		statement.Start = start[0]
 	}
+	return statement
 }
 
-func (statement *Statement) OrderBy(order string) {
+// Generate "Order By order" statement
+func (statement *Statement) OrderBy(order string) *Statement {
 	statement.OrderStr = order
+	return statement
 }
 
 //The join_operator should be one of INNER, LEFT OUTER, CROSS etc - this will be prepended to JOIN
-func (statement *Statement) Join(join_operator, tablename, condition string) {
+func (statement *Statement) Join(join_operator, tablename, condition string) *Statement {
 	if statement.JoinStr != "" {
 		statement.JoinStr = statement.JoinStr + fmt.Sprintf("%v JOIN %v ON %v", join_operator, tablename, condition)
 	} else {
 		statement.JoinStr = fmt.Sprintf("%v JOIN %v ON %v", join_operator, tablename, condition)
 	}
+	return statement
 }
 
-func (statement *Statement) GroupBy(keys string) {
+// Generate "Group By keys" statement
+func (statement *Statement) GroupBy(keys string) *Statement {
 	statement.GroupByStr = keys
+	return statement
 }
 
-func (statement *Statement) Having(conditions string) {
+// Generate "Having conditions" statement
+func (statement *Statement) Having(conditions string) *Statement {
 	statement.HavingStr = fmt.Sprintf("HAVING %v", conditions)
+	return statement
 }
 
 func (statement *Statement) genColumnStr() string {
@@ -413,7 +465,7 @@ func (s *Statement) genDropSQL() string {
 }
 
 func (statement Statement) genGetSql(bean interface{}) (string, []interface{}) {
-	table := statement.Engine.AutoMap(bean)
+	table := statement.Engine.autoMap(bean)
 	statement.RefTable = table
 
 	colNames, args := buildConditions(statement.Engine, table, bean, true,
@@ -451,7 +503,7 @@ func (s *Statement) genAddUniqueStr(uqeName string, cols []string) (string, []in
 }
 
 func (statement Statement) genCountSql(bean interface{}) (string, []interface{}) {
-	table := statement.Engine.AutoMap(bean)
+	table := statement.Engine.autoMap(bean)
 	statement.RefTable = table
 
 	colNames, args := buildConditions(statement.Engine, table, bean, true, statement.allUseBool, statement.boolColumnMap)

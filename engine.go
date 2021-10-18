@@ -37,6 +37,8 @@ type dialect interface {
 	GetIndexes(tableName string) (map[string]*Index, error)
 }
 
+// Engine is the major struct of xorm, it means a database manager.
+// Commonly, an application only need one engine
 type Engine struct {
 	Mapper         IMapper
 	TagIdentifier  string
@@ -96,6 +98,11 @@ func (engine *Engine) SetMaxConns(conns int) {
 	engine.Pool.SetMaxConns(conns)
 }
 
+// SetMaxIdleConns
+func (engine *Engine) SetMaxIdleConns(conns int) {
+	engine.Pool.SetMaxIdleConns(conns)
+}
+
 // SetDefaltCacher set the default cacher. Xorm's default not enable cacher.
 func (engine *Engine) SetDefaultCacher(cacher Cacher) {
 	if cacher == nil {
@@ -117,7 +124,7 @@ func (engine *Engine) NoCache() *Session {
 // Set a table use a special cacher
 func (engine *Engine) MapCacher(bean interface{}, cacher Cacher) {
 	t := rType(bean)
-	engine.AutoMapType(t)
+	engine.autoMapType(t)
 	engine.Tables[t].Cacher = cacher
 }
 
@@ -136,11 +143,6 @@ func (engine *Engine) NewSession() *Session {
 // Close the engine
 func (engine *Engine) Close() error {
 	return engine.Pool.Close(engine)
-}
-
-// Test method is deprecated, use Ping() method.
-func (engine *Engine) Test() error {
-	return engine.Ping()
 }
 
 // Ping tests if database is alive.
@@ -179,20 +181,29 @@ func (engine *Engine) LogWarn(contents ...interface{}) {
 	}
 }
 
-// execute sql
+// Sql method let's you manualy write raw sql and operate
+// For example:
+//
+// 		engine.Sql("select * from user").Find(&users)
+//
+// This	code will execute "select * from user" and set the records to users
+//
 func (engine *Engine) Sql(querystring string, args ...interface{}) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Sql(querystring, args...)
 }
 
+// Default if your struct has "created" or "updated" filed tag, the fields
+// will automatically be filled with current time when Insert or Update
+// invoked. Call NoAutoTime if you dont' want to fill automatically.
 func (engine *Engine) NoAutoTime() *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.NoAutoTime()
 }
 
-// retrieve all tables, columns, indexes' informations from database.
+// Retrieve all tables, columns, indexes' informations from database.
 func (engine *Engine) DBMetas() ([]*Table, error) {
 	tables, err := engine.dialect.GetTables()
 	if err != nil {
@@ -261,100 +272,123 @@ func (engine *Engine) StoreEngine(storeEngine string) *Session {
 	return session.StoreEngine(storeEngine)
 }
 
+// use for distinct columns. Caution: when you are using cache,
+// distinct will not be cached because cache system need id,
+// but distinct will not provide id
 func (engine *Engine) Distinct(columns ...string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Distinct(columns...)
 }
 
+// only use the paramters as select or update columns
 func (engine *Engine) Cols(columns ...string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Cols(columns...)
 }
 
+// Xorm automatically retrieve condition according struct, but
+// if struct has bool field, it will ignore them. So use UseBool
+// to tell system to do not ignore them.
+// If no paramters, it will use all the bool field of struct, or
+// it will use paramters's columns
 func (engine *Engine) UseBool(columns ...string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.UseBool(columns...)
 }
 
+// Only not use the paramters as select or update columns
 func (engine *Engine) Omit(columns ...string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Omit(columns...)
 }
 
+// This method will generate "column IN (?, ?)"
 func (engine *Engine) In(column string, args ...interface{}) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.In(column, args...)
 }
 
+// Temporarily change the Get, Find, Update's table
 func (engine *Engine) Table(tableNameOrBean interface{}) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Table(tableNameOrBean)
 }
 
+// This method will generate "LIMIT start, limit"
 func (engine *Engine) Limit(limit int, start ...int) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Limit(limit, start...)
 }
 
+// Method Desc will generate "ORDER BY column1 DESC, column2 DESC"
+// This will
 func (engine *Engine) Desc(colNames ...string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Desc(colNames...)
 }
 
+// Method Asc will generate "ORDER BY column1 DESC, column2 Asc"
+// This method can chainable use.
+//
+//		engine.Desc("name").Asc("age").Find(&users)
+//		// SELECT * FROM user ORDER BY name DESC, age ASC
+//
 func (engine *Engine) Asc(colNames ...string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Asc(colNames...)
 }
 
+// Method OrderBy will generate "ORDER BY order"
 func (engine *Engine) OrderBy(order string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.OrderBy(order)
 }
 
-//The join_operator should be one of INNER, LEFT OUTER, CROSS etc - this will be prepended to JOIN
+// The join_operator should be one of INNER, LEFT OUTER, CROSS etc - this will be prepended to JOIN
 func (engine *Engine) Join(join_operator, tablename, condition string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Join(join_operator, tablename, condition)
 }
 
+// Generate Group By statement
 func (engine *Engine) GroupBy(keys string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.GroupBy(keys)
 }
 
+// Generate Having statement
 func (engine *Engine) Having(conditions string) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Having(conditions)
 }
 
-//
-func (engine *Engine) AutoMapType(t reflect.Type) *Table {
+func (engine *Engine) autoMapType(t reflect.Type) *Table {
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
 	table, ok := engine.Tables[t]
 	if !ok {
-		table = engine.MapType(t)
+		table = engine.mapType(t)
 		engine.Tables[t] = table
 	}
 	return table
 }
 
-func (engine *Engine) AutoMap(bean interface{}) *Table {
+func (engine *Engine) autoMap(bean interface{}) *Table {
 	t := rType(bean)
-	return engine.AutoMapType(t)
+	return engine.autoMapType(t)
 }
 
 func (engine *Engine) newTable() *Table {
@@ -366,7 +400,7 @@ func (engine *Engine) newTable() *Table {
 	return table
 }
 
-func (engine *Engine) MapType(t reflect.Type) *Table {
+func (engine *Engine) mapType(t reflect.Type) *Table {
 	table := engine.newTable()
 	table.Name = engine.Mapper.Obj2Table(t.Name())
 	table.Type = t
@@ -390,7 +424,7 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 				}
 				if (strings.ToUpper(tags[0]) == "EXTENDS") &&
 					(fieldType.Kind() == reflect.Struct) {
-					parentTable := engine.MapType(fieldType)
+					parentTable := engine.mapType(fieldType)
 					for name, col := range parentTable.Columns {
 						col.FieldName = fmt.Sprintf("%v.%v", fieldType.Name(), col.FieldName)
 						table.Columns[name] = col
@@ -535,36 +569,36 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 }
 
 // Map a struct to a table
-func (engine *Engine) Map(beans ...interface{}) (e error) {
+func (engine *Engine) mapping(beans ...interface{}) (e error) {
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
 	for _, bean := range beans {
 		t := rType(bean)
-		engine.Tables[t] = engine.MapType(t)
+		engine.Tables[t] = engine.mapType(t)
 	}
 	return
 }
 
-// Is a table has any reocrd
+// If a table has any reocrd
 func (engine *Engine) IsTableEmpty(bean interface{}) (bool, error) {
 	t := rType(bean)
 	if t.Kind() != reflect.Struct {
 		return false, errors.New("bean should be a struct or struct's point")
 	}
-	engine.AutoMapType(t)
+	engine.autoMapType(t)
 	session := engine.NewSession()
 	defer session.Close()
 	rows, err := session.Count(bean)
 	return rows > 0, err
 }
 
-// Is a table is exist
+// If a table is exist
 func (engine *Engine) IsTableExist(bean interface{}) (bool, error) {
 	t := rType(bean)
 	if t.Kind() != reflect.Struct {
 		return false, errors.New("bean should be a struct or struct's point")
 	}
-	table := engine.AutoMapType(t)
+	table := engine.autoMapType(t)
 	session := engine.NewSession()
 	defer session.Close()
 	has, err := session.isTableExist(table.Name)
@@ -591,7 +625,7 @@ func (engine *Engine) ClearCacheBean(bean interface{}, id int64) error {
 	if t.Kind() != reflect.Struct {
 		return errors.New("error params")
 	}
-	table := engine.AutoMap(bean)
+	table := engine.autoMap(bean)
 	if table.Cacher != nil {
 		table.Cacher.ClearIds(table.Name)
 		table.Cacher.DelBean(table.Name, id)
@@ -606,7 +640,7 @@ func (engine *Engine) ClearCache(beans ...interface{}) error {
 		if t.Kind() != reflect.Struct {
 			return errors.New("error params")
 		}
-		table := engine.AutoMap(bean)
+		table := engine.autoMap(bean)
 		if table.Cacher != nil {
 			table.Cacher.ClearIds(table.Name)
 			table.Cacher.ClearBeans(table.Name)
@@ -615,12 +649,12 @@ func (engine *Engine) ClearCache(beans ...interface{}) error {
 	return nil
 }
 
-// Sync the new struct change to database, this method will automatically add
+// Sync the new struct changes to database, this method will automatically add
 // table, column, index, unique. but will not delete or change anything.
 // If you change some field, you should change the database manually.
 func (engine *Engine) Sync(beans ...interface{}) error {
 	for _, bean := range beans {
-		table := engine.AutoMap(bean)
+		table := engine.autoMap(bean)
 
 		s := engine.NewSession()
 		defer s.Close()
@@ -710,7 +744,7 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 	return nil
 }
 
-func (engine *Engine) UnMap(beans ...interface{}) (e error) {
+func (engine *Engine) unMap(beans ...interface{}) (e error) {
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
 	for _, bean := range beans {
@@ -723,7 +757,7 @@ func (engine *Engine) UnMap(beans ...interface{}) (e error) {
 }
 
 // Drop all mapped table
-func (engine *Engine) DropAll() error {
+func (engine *Engine) dropAll() error {
 	session := engine.NewSession()
 	defer session.Close()
 
@@ -731,7 +765,7 @@ func (engine *Engine) DropAll() error {
 	if err != nil {
 		return err
 	}
-	err = session.DropAll()
+	err = session.dropAll()
 	if err != nil {
 		session.Rollback()
 		return err
@@ -776,66 +810,86 @@ func (engine *Engine) DropTables(beans ...interface{}) error {
 	return session.Commit()
 }
 
-func (engine *Engine) CreateAll() error {
+func (engine *Engine) createAll() error {
 	session := engine.NewSession()
 	defer session.Close()
-	return session.CreateAll()
+	return session.createAll()
 }
 
+// Exec raw sql
 func (engine *Engine) Exec(sql string, args ...interface{}) (sql.Result, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Exec(sql, args...)
 }
 
+// Exec a raw sql and return records as []map[string][]byte
 func (engine *Engine) Query(sql string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Query(sql, paramStr...)
 }
 
+// Insert one or more records
 func (engine *Engine) Insert(beans ...interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Insert(beans...)
 }
 
+// Insert only one record
 func (engine *Engine) InsertOne(bean interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.InsertOne(bean)
 }
 
+// Update records, bean's non-empty fields are updated contents,
+// condiBean' non-empty filds are conditions
+// CAUTION:
+//	    1.bool will defaultly be updated content nor conditions
+// 		You should call UseBool if you have bool to use.
+//		2.float32 & float64 may be not inexact as conditions
 func (engine *Engine) Update(bean interface{}, condiBeans ...interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Update(bean, condiBeans...)
 }
 
+// Delete records, bean's non-empty fields are conditions
 func (engine *Engine) Delete(bean interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Delete(bean)
 }
 
+// Get retrieve one record from table, bean's non-empty fields
+// are conditions
 func (engine *Engine) Get(bean interface{}) (bool, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Get(bean)
 }
 
+// Find retrieve records from table, condiBeans's non-empty fields
+// are conditions. beans could be []Struct, []*Struct, map[int64]Struct
+// map[int64]*Struct
 func (engine *Engine) Find(beans interface{}, condiBeans ...interface{}) error {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Find(beans, condiBeans...)
 }
 
+// Iterate record by record handle records from table, bean's non-empty fields
+// are conditions.
 func (engine *Engine) Iterate(bean interface{}, fun IterFunc) error {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Iterate(bean, fun)
 }
 
+// Count counts the records. bean's non-empty fields
+// are conditions.
 func (engine *Engine) Count(bean interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
