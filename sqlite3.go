@@ -9,9 +9,15 @@ type sqlite3 struct {
 	base
 }
 
+type sqlite3Parser struct {
+}
+
+func (p *sqlite3Parser) parse(driverName, dataSourceName string) (*uri, error) {
+	return &uri{dbType: SQLITE, dbName: dataSourceName}, nil
+}
+
 func (db *sqlite3) Init(drivername, dataSourceName string) error {
-	db.base.init(drivername, dataSourceName)
-	return nil
+	return db.base.init(&sqlite3Parser{}, drivername, dataSourceName)
 }
 
 func (db *sqlite3) SqlType(c *Column) string {
@@ -83,7 +89,7 @@ func (db *sqlite3) ColumnCheckSql(tableName, colName string) (string, []interfac
 func (db *sqlite3) GetColumns(tableName string) ([]string, map[string]*Column, error) {
 	args := []interface{}{tableName}
 	s := "SELECT sql FROM sqlite_master WHERE type='table' and name = ?"
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,7 +148,7 @@ func (db *sqlite3) GetTables() ([]*Table, error) {
 	args := []interface{}{}
 	s := "SELECT name FROM sqlite_master WHERE type='table'"
 
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +178,7 @@ func (db *sqlite3) GetTables() ([]*Table, error) {
 func (db *sqlite3) GetIndexes(tableName string) (map[string]*Index, error) {
 	args := []interface{}{tableName}
 	s := "SELECT sql FROM sqlite_master WHERE type='index' and tbl_name = ?"
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, err
 	}

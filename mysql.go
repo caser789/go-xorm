@@ -11,22 +11,67 @@ import (
 	"time"
 )
 
-type base struct {
-	drivername     string
-	dataSourceName string
+type uri struct {
+	dbType  string
+	proto   string
+	host    string
+	port    string
+	dbName  string
+	user    string
+	passwd  string
+	charset string
+	laddr   string
+	raddr   string
+	timeout time.Duration
 }
 
-func (b *base) init(drivername, dataSourceName string) {
-	b.drivername, b.dataSourceName = drivername, dataSourceName
+type parser interface {
+	parse(driverName, dataSourceName string) (*uri, error)
+}
+
+type mysqlParser struct {
+}
+
+func (p *mysqlParser) parse(driverName, dataSourceName string) (*uri, error) {
+	//cfg.params = make(map[string]string)
+	dsnPattern := regexp.MustCompile(
+		`^(?:(?P<user>.*?)(?::(?P<passwd>.*))?@)?` + // [user[:password]@]
+			`(?:(?P<net>[^\(]*)(?:\((?P<addr>[^\)]*)\))?)?` + // [net[(addr)]]
+			`\/(?P<dbname>.*?)` + // /dbname
+			`(?:\?(?P<params>[^\?]*))?$`) // [?param1=value1&paramN=valueN]
+	matches := dsnPattern.FindStringSubmatch(dataSourceName)
+	//tlsConfigRegister := make(map[string]*tls.Config)
+	names := dsnPattern.SubexpNames()
+
+	uri := &uri{dbType: MYSQL}
+
+	for i, match := range matches {
+		switch names[i] {
+		case "dbname":
+			uri.dbName = match
+		}
+	}
+	return uri, nil
+}
+
+type base struct {
+	parser         parser
+	driverName     string
+	dataSourceName string
+	*uri
+}
+
+func (b *base) init(parser parser, drivername, dataSourceName string) (err error) {
+	b.parser = parser
+	b.driverName, b.dataSourceName = drivername, dataSourceName
+	b.uri, err = b.parser.parse(b.driverName, b.dataSourceName)
+	return
 }
 
 type mysql struct {
 	base
-	user              string
-	passwd            string
 	net               string
 	addr              string
-	dbname            string
 	params            map[string]string
 	loc               *time.Location
 	timeout           time.Duration
@@ -36,41 +81,8 @@ type mysql struct {
 	clientFoundRows   bool
 }
 
-/*func readBool(input string) (value bool, valid bool) {
-	switch input {
-	case "1", "true", "TRUE", "True":
-		return true, true
-	case "0", "false", "FALSE", "False":
-		return false, true
-	}
-
-	// Not a valid bool value
-	return
-}*/
-
-func (cfg *mysql) parseDSN(dsn string) (err error) {
-	//cfg.params = make(map[string]string)
-	dsnPattern := regexp.MustCompile(
-		`^(?:(?P<user>.*?)(?::(?P<passwd>.*))?@)?` + // [user[:password]@]
-			`(?:(?P<net>[^\(]*)(?:\((?P<addr>[^\)]*)\))?)?` + // [net[(addr)]]
-			`\/(?P<dbname>.*?)` + // /dbname
-			`(?:\?(?P<params>[^\?]*))?$`) // [?param1=value1&paramN=valueN]
-	matches := dsnPattern.FindStringSubmatch(dsn)
-	//tlsConfigRegister := make(map[string]*tls.Config)
-	names := dsnPattern.SubexpNames()
-
-	for i, match := range matches {
-		switch names[i] {
-		case "dbname":
-			cfg.dbname = match
-		}
-	}
-	return
-}
-
 func (db *mysql) Init(drivername, uri string) error {
-	db.base.init(drivername, uri)
-	return db.parseDSN(uri)
+	return db.base.init(&mysqlParser{}, drivername, uri)
 }
 
 func (db *mysql) SqlType(c *Column) string {
@@ -132,29 +144,29 @@ func (db *mysql) IndexOnTable() bool {
 }
 
 func (db *mysql) IndexCheckSql(tableName, idxName string) (string, []interface{}) {
-	args := []interface{}{db.dbname, tableName, idxName}
+	args := []interface{}{db.dbName, tableName, idxName}
 	sql := "SELECT `INDEX_NAME` FROM `INFORMATION_SCHEMA`.`STATISTICS`"
 	sql += " WHERE `TABLE_SCHEMA` = ? AND `TABLE_NAME` = ? AND `INDEX_NAME`=?"
 	return sql, args
 }
 
 func (db *mysql) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
-	args := []interface{}{db.dbname, tableName, colName}
+	args := []interface{}{db.dbName, tableName, colName}
 	sql := "SELECT `COLUMN_NAME` FROM `INFORMATION_SCHEMA`.`COLUMNS` WHERE `TABLE_SCHEMA` = ? AND `TABLE_NAME` = ? AND `COLUMN_NAME` = ?"
 	return sql, args
 }
 
 func (db *mysql) TableCheckSql(tableName string) (string, []interface{}) {
-	args := []interface{}{db.dbname, tableName}
+	args := []interface{}{db.dbName, tableName}
 	sql := "SELECT `TABLE_NAME` from `INFORMATION_SCHEMA`.`TABLES` WHERE `TABLE_SCHEMA`=? and `TABLE_NAME`=?"
 	return sql, args
 }
 
 func (db *mysql) GetColumns(tableName string) ([]string, map[string]*Column, error) {
-	args := []interface{}{db.dbname, tableName}
+	args := []interface{}{db.dbName, tableName}
 	s := "SELECT `COLUMN_NAME`, `IS_NULLABLE`, `COLUMN_DEFAULT`, `COLUMN_TYPE`," +
 		" `COLUMN_KEY`, `EXTRA` FROM `INFORMATION_SCHEMA`.`COLUMNS` WHERE `TABLE_SCHEMA` = ? AND `TABLE_NAME` = ?"
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -232,9 +244,9 @@ func (db *mysql) GetColumns(tableName string) ([]string, map[string]*Column, err
 }
 
 func (db *mysql) GetTables() ([]*Table, error) {
-	args := []interface{}{db.dbname}
+	args := []interface{}{db.dbName}
 	s := "SELECT `TABLE_NAME`, `ENGINE`, `TABLE_ROWS`, `AUTO_INCREMENT` from `INFORMATION_SCHEMA`.`TABLES` WHERE `TABLE_SCHEMA`=?"
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, err
 	}
@@ -260,9 +272,9 @@ func (db *mysql) GetTables() ([]*Table, error) {
 }
 
 func (db *mysql) GetIndexes(tableName string) (map[string]*Index, error) {
-	args := []interface{}{db.dbname, tableName}
+	args := []interface{}{db.dbName, tableName}
 	s := "SELECT `INDEX_NAME`, `NON_UNIQUE`, `COLUMN_NAME` FROM `INFORMATION_SCHEMA`.`STATISTICS` WHERE `TABLE_SCHEMA` = ? AND `TABLE_NAME` = ?"
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, err
 	}

@@ -8,23 +8,20 @@ import (
 
 type mymysql struct {
 	mysql
-	proto   string
-	raddr   string
-	laddr   string
-	timeout time.Duration
-	db      string
-	user    string
-	passwd  string
 }
 
-func (db *mymysql) Init(drivername, uri string) error {
-	db.mysql.base.init(drivername, uri)
-	pd := strings.SplitN(uri, "*", 2)
+type mymysqlParser struct {
+}
+
+func (p *mymysqlParser) parse(driverName, dataSourceName string) (*uri, error) {
+	db := &uri{dbType: MYSQL}
+
+	pd := strings.SplitN(dataSourceName, "*", 2)
 	if len(pd) == 2 {
 		// Parse protocol part of URI
 		p := strings.SplitN(pd[0], ":", 2)
 		if len(p) != 2 {
-			return errors.New("Wrong protocol part of URI")
+			return nil, errors.New("Wrong protocol part of URI")
 		}
 		db.proto = p[0]
 		options := strings.Split(p[1], ",")
@@ -43,11 +40,11 @@ func (db *mymysql) Init(drivername, uri string) error {
 			case "timeout":
 				to, err := time.ParseDuration(v)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				db.timeout = to
 			default:
-				return errors.New("Unknown option: " + k)
+				return nil, errors.New("Unknown option: " + k)
 			}
 		}
 		// Remove protocol part
@@ -56,11 +53,15 @@ func (db *mymysql) Init(drivername, uri string) error {
 	// Parse database part of URI
 	dup := strings.SplitN(pd[0], "/", 3)
 	if len(dup) != 3 {
-		return errors.New("Wrong database part of URI")
+		return nil, errors.New("Wrong database part of URI")
 	}
-	db.dbname = dup[0]
+	db.dbName = dup[0]
 	db.user = dup[1]
 	db.passwd = dup[2]
 
-	return nil
+	return db, nil
+}
+
+func (db *mymysql) Init(drivername, uri string) error {
+	return db.mysql.base.init(&mymysqlParser{}, drivername, uri)
 }

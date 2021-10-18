@@ -10,7 +10,6 @@ import (
 
 type postgres struct {
 	base
-	dbname string
 }
 
 type values map[string]string
@@ -44,17 +43,23 @@ func parseOpts(name string, o values) {
 	}
 }
 
-func (db *postgres) Init(drivername, uri string) error {
-	db.base.init(drivername, uri)
+type postgresParser struct {
+}
 
+func (p *postgresParser) parse(driverName, dataSourceName string) (*uri, error) {
+	db := &uri{dbType: POSTGRES}
 	o := make(values)
-	parseOpts(uri, o)
+	parseOpts(dataSourceName, o)
 
-	db.dbname = o.Get("dbname")
-	if db.dbname == "" {
-		return errors.New("dbname is empty")
+	db.dbName = o.Get("dbname")
+	if db.dbName == "" {
+		return nil, errors.New("dbname is empty")
 	}
-	return nil
+	return db, nil
+}
+
+func (db *postgres) Init(drivername, uri string) error {
+	return db.base.init(&postgresParser{}, drivername, uri)
 }
 
 func (db *postgres) SqlType(c *Column) string {
@@ -145,7 +150,7 @@ func (db *postgres) GetColumns(tableName string) ([]string, map[string]*Column, 
 	s := "SELECT column_name, column_default, is_nullable, data_type, character_maximum_length" +
 		", numeric_precision, numeric_precision_radix FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name = $1"
 
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -221,7 +226,7 @@ func (db *postgres) GetColumns(tableName string) ([]string, map[string]*Column, 
 func (db *postgres) GetTables() ([]*Table, error) {
 	args := []interface{}{}
 	s := "SELECT tablename FROM pg_tables where schemaname = 'public'"
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +254,7 @@ func (db *postgres) GetIndexes(tableName string) (map[string]*Index, error) {
 	args := []interface{}{tableName}
 	s := "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' and tablename = $1"
 
-	cnn, err := sql.Open(db.drivername, db.dataSourceName)
+	cnn, err := sql.Open(db.driverName, db.dataSourceName)
 	if err != nil {
 		return nil, err
 	}
