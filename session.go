@@ -82,6 +82,11 @@ func (session *Session) Cols(columns ...string) *Session {
 	return session
 }
 
+func (session *Session) Omit(columns ...string) *Session {
+	session.Statement.Omit(columns...)
+	return session
+}
+
 // Method NoAutoTime means do not automatically give created field and updated field
 // the current time on the current session temporarily
 func (session *Session) NoAutoTime() *Session {
@@ -438,8 +443,9 @@ func (statement *Statement) convertIdSql(sql string) string {
 			if len(sqls) != 2 {
 				return ""
 			}
-			return fmt.Sprintf("SELECT %v.%v FROM %v", statement.Engine.Quote(statement.TableName()),
+			newsql := fmt.Sprintf("SELECT %v.%v FROM %v", statement.Engine.Quote(statement.TableName()),
 				statement.Engine.Quote(col.Name), sqls[1])
+			return newsql
 		}
 	}
 	return ""
@@ -535,14 +541,14 @@ func (session *Session) cacheFind(t reflect.Type, sql string, rowsSlicePtr inter
 	cacher := table.Cacher
 	ids, err := getCacheSql(cacher, session.Statement.TableName(), newsql, args)
 	if err != nil {
-		session.Engine.LogError(err)
+		//session.Engine.LogError(err)
 		resultsSlice, err := session.query(newsql, args...)
 		if err != nil {
 			return err
 		}
 		// 查询数目太大，采用缓存将不是一个很好的方式。
 		if len(resultsSlice) > 100 {
-			session.Engine.LogDebug("[xorm:cacheFind] ids > 100, no cache")
+			session.Engine.LogDebug("[xorm:cacheFind] ids length %v > 100, no cache", len(resultsSlice))
 			return ErrCacheFailed
 		}
 
@@ -573,18 +579,25 @@ func (session *Session) cacheFind(t reflect.Type, sql string, rowsSlicePtr inter
 	}
 
 	sliceValue := reflect.Indirect(reflect.ValueOf(rowsSlicePtr))
+	pkFieldName := session.Statement.RefTable.PKColumn().FieldName
 
-	var idxes []int = make([]int, 0)
+	ididxes := make(map[int64]int)
 	var ides []interface{} = make([]interface{}, 0)
 	var temps []interface{} = make([]interface{}, len(ids))
 	tableName := session.Statement.TableName()
 	for idx, id := range ids {
 		bean := cacher.GetBean(tableName, id)
 		if bean == nil {
-			idxes = append(idxes, idx)
 			ides = append(ides, id)
+			ididxes[id] = idx
 		} else {
 			session.Engine.LogDebug("[xorm:cacheFind] cached bean:", tableName, id, bean)
+
+			sid := reflect.Indirect(reflect.ValueOf(bean)).FieldByName(pkFieldName).Int()
+			if sid != id {
+				session.Engine.LogError("[xorm:cacheFind] error cache", id, sid, bean)
+				return ErrCacheFailed
+			}
 			temps[idx] = bean
 		}
 	}
@@ -596,48 +609,124 @@ func (session *Session) cacheFind(t reflect.Type, sql string, rowsSlicePtr inter
 		slices := reflect.New(reflect.SliceOf(t))
 		beans := slices.Interface()
 		//beans := reflect.New(sliceValue.Type()).Interface()
-		err = newSession.In("(id)", ides...).OrderBy(session.Statement.OrderStr).NoCache().Find(beans)
+		//err = newSession.In("(id)", ides...).OrderBy(session.Statement.OrderStr).NoCache().Find(beans)
+		err = newSession.In("(id)", ides...).NoCache().Find(beans)
 		if err != nil {
 			return err
 		}
 
 		vs := reflect.Indirect(reflect.ValueOf(beans))
 		for i := 0; i < vs.Len(); i++ {
-			bean := vs.Index(i).Addr().Interface()
-			temps[idxes[i]] = bean
-			session.Engine.LogDebug("[xorm:cacheFind] cache bean:", tableName, ides[i], bean)
-			cacher.PutBean(tableName, ides[i].(int64), bean)
+			rv := vs.Index(i)
+			if rv.Kind() != reflect.Ptr {
+				rv = rv.Addr()
+			}
+			bean := rv.Interface()
+			id := reflect.Indirect(reflect.ValueOf(bean)).FieldByName(pkFieldName).Int()
+			//bean := vs.Index(i).Addr().Interface()
+			temps[ididxes[id]] = bean
+			//temps[idxes[i]] = bean
+			session.Engine.LogDebug("[xorm:cacheFind] cache bean:", tableName, id, bean)
+			cacher.PutBean(tableName, id, bean)
 		}
 	}
 
 	for j := 0; j < len(temps); j++ {
 		bean := temps[j]
-		if bean != nil {
-			if sliceValue.Kind() == reflect.Slice {
-				if t.Kind() == reflect.Ptr {
-					sliceValue.Set(reflect.Append(sliceValue, reflect.ValueOf(bean)))
-				} else {
-					sliceValue.Set(reflect.Append(sliceValue, reflect.Indirect(reflect.ValueOf(bean))))
-				}
-			} else if sliceValue.Kind() == reflect.Map {
-				var key int64
-				if table.PrimaryKey != "" {
-					key = ids[j]
-				} else {
-					key = int64(j)
-				}
-				if t.Kind() == reflect.Ptr {
-					sliceValue.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(bean))
-				} else {
-					sliceValue.SetMapIndex(reflect.ValueOf(key), reflect.Indirect(reflect.ValueOf(bean)))
-				}
+		if bean == nil {
+			session.Engine.LogError("[xorm:cacheFind] cache error:", tableName, ides[j], bean)
+			return errors.New("cache error")
+		}
+		if sliceValue.Kind() == reflect.Slice {
+			if t.Kind() == reflect.Ptr {
+				sliceValue.Set(reflect.Append(sliceValue, reflect.ValueOf(bean)))
+			} else {
+				sliceValue.Set(reflect.Append(sliceValue, reflect.Indirect(reflect.ValueOf(bean))))
 			}
-		} else {
+		} else if sliceValue.Kind() == reflect.Map {
+			var key int64
+			if table.PrimaryKey != "" {
+				key = ids[j]
+			} else {
+				key = int64(j)
+			}
+			if t.Kind() == reflect.Ptr {
+				sliceValue.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(bean))
+			} else {
+				sliceValue.SetMapIndex(reflect.ValueOf(key), reflect.Indirect(reflect.ValueOf(bean)))
+			}
+		}
+		/*} else {
 			session.Engine.LogDebug("[xorm:cacheFind] cache delete:", tableName, ides[j])
 			cacher.DelBean(tableName, ids[j])
 
 			session.Engine.LogDebug("[xorm:cacheFind] cache clear:", tableName)
 			cacher.ClearIds(tableName)
+		}*/
+	}
+
+	return nil
+}
+
+type IterFunc func(idx int, bean interface{}) error
+
+func (session *Session) Iterate(bean interface{}, fun IterFunc) error {
+	err := session.newDb()
+	if err != nil {
+		return err
+	}
+
+	defer session.Statement.Init()
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+
+	var sql string
+	var args []interface{}
+	session.Statement.RefTable = session.Engine.AutoMap(bean)
+	if session.Statement.RawSQL == "" {
+		sql, args = session.Statement.genGetSql(bean)
+	} else {
+		sql = session.Statement.RawSQL
+		args = session.Statement.RawParams
+	}
+
+	for _, filter := range session.Engine.Filters {
+		sql = filter.Do(sql, session)
+	}
+
+	session.Engine.LogSQL(sql)
+	session.Engine.LogSQL(args)
+
+	s, err := session.Db.Prepare(sql)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	rows, err := s.Query(args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	fields, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	t := reflect.Indirect(reflect.ValueOf(bean)).Type()
+	b := reflect.New(t).Interface()
+	i := 0
+	for rows.Next() {
+		result, err := row2map(rows, fields)
+		if err == nil {
+			err = session.scanMapIntoStruct(b, result)
+		}
+		if err == nil {
+			err = fun(i, b)
+			i = i + 1
+		}
+		if err != nil {
+			return err
 		}
 	}
 
@@ -963,77 +1052,91 @@ func (session *Session) DropAll() error {
 	return nil
 }
 
+func row2map(rows *sql.Rows, fields []string) (resultsMap map[string][]byte, err error) {
+	result := make(map[string][]byte)
+	var scanResultContainers []interface{}
+	for i := 0; i < len(fields); i++ {
+		var scanResultContainer interface{}
+		scanResultContainers = append(scanResultContainers, &scanResultContainer)
+	}
+	if err := rows.Scan(scanResultContainers...); err != nil {
+		return nil, err
+	}
+	for ii, key := range fields {
+		rawValue := reflect.Indirect(reflect.ValueOf(scanResultContainers[ii]))
+
+		//if row is null then ignore
+		if rawValue.Interface() == nil {
+			//fmt.Println("ignore ...", key, rawValue)
+			continue
+		}
+		aa := reflect.TypeOf(rawValue.Interface())
+		vv := reflect.ValueOf(rawValue.Interface())
+		var str string
+		switch aa.Kind() {
+		case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			str = strconv.FormatInt(vv.Int(), 10)
+			result[key] = []byte(str)
+		case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			str = strconv.FormatUint(vv.Uint(), 10)
+			result[key] = []byte(str)
+		case reflect.Float32, reflect.Float64:
+			str = strconv.FormatFloat(vv.Float(), 'f', -1, 64)
+			result[key] = []byte(str)
+		case reflect.Slice:
+			switch aa.Elem().Kind() {
+			case reflect.Uint8:
+				result[key] = rawValue.Interface().([]byte)
+			default:
+				//session.Engine.LogError("Unsupported type")
+			}
+		case reflect.String:
+			str = vv.String()
+			result[key] = []byte(str)
+		//时间类型
+		case reflect.Struct:
+			if aa.String() == "time.Time" {
+				str = rawValue.Interface().(time.Time).Format("2006-01-02 15:04:05.000 -0700")
+				result[key] = []byte(str)
+			} else {
+				//session.Engine.LogError("Unsupported struct type")
+			}
+		default:
+			//session.Engine.LogError("Unsupported type")
+		}
+	}
+	return result, nil
+}
+
+func rows2maps(rows *sql.Rows) (resultsSlice []map[string][]byte, err error) {
+	fields, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		result, err := row2map(rows, fields)
+		if err != nil {
+			return nil, err
+		}
+		resultsSlice = append(resultsSlice, result)
+	}
+
+	return resultsSlice, nil
+}
+
 func query(db *sql.DB, sql string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
 	s, err := db.Prepare(sql)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	res, err := s.Query(params...)
+	rows, err := s.Query(params...)
 	if err != nil {
 		return nil, err
 	}
-	defer res.Close()
-	fields, err := res.Columns()
-	if err != nil {
-		return nil, err
-	}
-	for res.Next() {
-		result := make(map[string][]byte)
-		var scanResultContainers []interface{}
-		for i := 0; i < len(fields); i++ {
-			var scanResultContainer interface{}
-			scanResultContainers = append(scanResultContainers, &scanResultContainer)
-		}
-		if err := res.Scan(scanResultContainers...); err != nil {
-			return nil, err
-		}
-		for ii, key := range fields {
-			rawValue := reflect.Indirect(reflect.ValueOf(scanResultContainers[ii]))
+	defer rows.Close()
 
-			//if row is null then ignore
-			if rawValue.Interface() == nil {
-				//fmt.Println("ignore ...", key, rawValue)
-				continue
-			}
-			aa := reflect.TypeOf(rawValue.Interface())
-			vv := reflect.ValueOf(rawValue.Interface())
-			var str string
-			switch aa.Kind() {
-			case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				str = strconv.FormatInt(vv.Int(), 10)
-				result[key] = []byte(str)
-			case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-				str = strconv.FormatUint(vv.Uint(), 10)
-				result[key] = []byte(str)
-			case reflect.Float32, reflect.Float64:
-				str = strconv.FormatFloat(vv.Float(), 'f', -1, 64)
-				result[key] = []byte(str)
-			case reflect.Slice:
-				switch aa.Elem().Kind() {
-				case reflect.Uint8:
-					result[key] = rawValue.Interface().([]byte)
-				default:
-					//session.Engine.LogError("Unsupported type")
-				}
-			case reflect.String:
-				str = vv.String()
-				result[key] = []byte(str)
-			//时间类型
-			case reflect.Struct:
-				if aa.String() == "time.Time" {
-					str = rawValue.Interface().(time.Time).Format("2006-01-02 15:04:05.000 -0700")
-					result[key] = []byte(str)
-				} else {
-					//session.Engine.LogError("Unsupported struct type")
-				}
-			default:
-				//session.Engine.LogError("Unsupported type")
-			}
-		}
-		resultsSlice = append(resultsSlice, result)
-	}
-	return resultsSlice, nil
+	return rows2maps(rows)
 }
 
 func (session *Session) query(sql string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
