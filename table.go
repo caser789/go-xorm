@@ -115,27 +115,8 @@ var (
 	uintTypes = sort.StringSlice{"*uint", "*uint16", "*uint32", "*uint8"}
 )
 
-// !nashtsai! treat following var as interal const values, these are used for reflect.TypeOf comparision
-var (
-	c_EMPTY_STRING       string
-	c_BOOL_DEFAULT       bool
-	c_BYTE_DEFAULT       byte
-	c_COMPLEX64_DEFAULT  complex64
-	c_COMPLEX128_DEFAULT complex128
-	c_FLOAT32_DEFAULT    float32
-	c_FLOAT64_DEFAULT    float64
-	c_INT64_DEFAULT      int64
-	c_UINT64_DEFAULT     uint64
-	c_INT32_DEFAULT      int32
-	c_UINT32_DEFAULT     uint32
-	c_INT16_DEFAULT      int16
-	c_UINT16_DEFAULT     uint16
-	c_INT8_DEFAULT       int8
-	c_UINT8_DEFAULT      uint8
-	c_INT_DEFAULT        int
-	c_UINT_DEFAULT       uint
-	c_TIME_DEFAULT       time.Time
-)
+var b byte
+var tm time.Time
 
 func Type2SQLType(t reflect.Type) (st SQLType) {
 	switch k := t.Kind(); k {
@@ -150,7 +131,7 @@ func Type2SQLType(t reflect.Type) (st SQLType) {
 	case reflect.Complex64, reflect.Complex128:
 		st = SQLType{Varchar, 64, 0}
 	case reflect.Array, reflect.Slice, reflect.Map:
-		if t.Elem() == reflect.TypeOf(c_BYTE_DEFAULT) {
+		if t.Elem() == reflect.TypeOf(b) {
 			st = SQLType{Blob, 0, 0}
 		} else {
 			st = SQLType{Text, 0, 0}
@@ -160,7 +141,7 @@ func Type2SQLType(t reflect.Type) (st SQLType) {
 	case reflect.String:
 		st = SQLType{Varchar, 255, 0}
 	case reflect.Struct:
-		if t == reflect.TypeOf(c_TIME_DEFAULT) {
+		if t == reflect.TypeOf(tm) {
 			st = SQLType{DateTime, 0, 0}
 		} else {
 			st = SQLType{Text, 0, 0}
@@ -219,7 +200,7 @@ func SQLType2Type(st SQLType) reflect.Type {
 	case Bool:
 		return reflect.TypeOf(true)
 	case DateTime, Date, Time, TimeStamp, TimeStampz:
-		return reflect.TypeOf(c_TIME_DEFAULT)
+		return reflect.TypeOf(tm)
 	case Decimal, Numeric:
 		return reflect.TypeOf("")
 	default:

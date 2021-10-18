@@ -15,16 +15,18 @@ import (
 )
 
 const (
-	POSTGRES   = "postgres"
-	SQLITE     = "sqlite3"
-	MYSQL      = "mysql"
-	MYMYSQL    = "mymysql"
-	ORACLE_OCI = "oci8"
+	POSTGRES = "postgres"
+	SQLITE   = "sqlite3"
+	MYSQL    = "mysql"
+	MYMYSQL  = "mymysql"
+
+	MSSQL = "mssql"
 )
 
 // a dialect is a driver's wrapper
 type dialect interface {
 	Init(DriverName, DataSourceName string) error
+	DBType() string
 	SqlType(t *Column) string
 	SupportInsertMany() bool
 	QuoteStr() string
@@ -141,12 +143,6 @@ func (engine *Engine) NoCache() *Session {
 	return session.NoCache()
 }
 
-func (engine *Engine) NoCascade() *Session {
-	session := engine.NewSession()
-	session.IsAutoClose = true
-	return session.NoCascade()
-}
-
 // Set a table use a special cacher
 func (engine *Engine) MapCacher(bean interface{}, cacher Cacher) {
 	t := rType(bean)
@@ -255,7 +251,7 @@ func (engine *Engine) DBMetas() ([]*Table, error) {
 				if col, ok := table.Columns[name]; ok {
 					col.Indexes[index.Name] = true
 				} else {
-					return nil, errors.New("Unkonwn col " + name + " in indexes")
+					return nil, fmt.Errorf("Unknown col "+name+" in indexes %v", table.Columns)
 				}
 			}
 		}
@@ -753,6 +749,7 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 					if err != nil {
 						return err
 					}
+					fmt.Println("-----", isExist)
 					if !isExist {
 						session := engine.NewSession()
 						session.Statement.RefTable = table
