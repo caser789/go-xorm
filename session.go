@@ -24,17 +24,16 @@ type Session struct {
 	IsAutoClose            bool
 
 	// !nashtsai! storing these beans due to yet committed tx
-	afterInsertBeans []interface{}
-	afterUpdateBeans []interface{}
-	afterDeleteBeans []interface{}
+	// afterInsertBeans []interface{}
+	// afterUpdateBeans []interface{}
+	// afterDeleteBeans []interface{}
+	afterInsertBeans map[interface{}]*[]func(interface{})
+	afterUpdateBeans map[interface{}]*[]func(interface{})
+	afterDeleteBeans map[interface{}]*[]func(interface{})
 	// --
 
-	beforeInsertClosures []func(interface{})
-	beforeUpdateClosures []func(interface{})
-	beforeDeleteClosures []func(interface{})
-	afterInsertClosures  []func(interface{})
-	afterUpdateClosures  []func(interface{})
-	afterDeleteClosures  []func(interface{})
+	beforeClosures []func(interface{})
+	afterClosures  []func(interface{})
 }
 
 // Method Init reset the session as the init status.
@@ -46,15 +45,11 @@ func (session *Session) Init() {
 	session.IsAutoClose = false
 
 	// !nashtsai! is lazy init better?
-	session.afterInsertBeans = make([]interface{}, 0)
-	session.afterUpdateBeans = make([]interface{}, 0)
-	session.afterDeleteBeans = make([]interface{}, 0)
-	session.beforeInsertClosures = make([]func(interface{}), 0)
-	session.beforeUpdateClosures = make([]func(interface{}), 0)
-	session.beforeDeleteClosures = make([]func(interface{}), 0)
-	session.afterInsertClosures = make([]func(interface{}), 0)
-	session.afterUpdateClosures = make([]func(interface{}), 0)
-	session.afterDeleteClosures = make([]func(interface{}), 0)
+	session.afterInsertBeans = make(map[interface{}]*[]func(interface{}), 0)
+	session.afterUpdateBeans = make(map[interface{}]*[]func(interface{}), 0)
+	session.afterDeleteBeans = make(map[interface{}]*[]func(interface{}), 0)
+	session.beforeClosures = make([]func(interface{}), 0)
+	session.afterClosures = make([]func(interface{}), 0)
 }
 
 // Method Close release the connection from pool
@@ -100,50 +95,18 @@ func (session *Session) Id(id int64) *Session {
 	return session
 }
 
-// Apply before insert Processor, affected bean is passed to closure arg
-func (session *Session) BeforeInsert(closures func(interface{})) *Session {
+// Apply before Processor, affected bean is passed to closure arg
+func (session *Session) Before(closures func(interface{})) *Session {
 	if closures != nil {
-		session.beforeInsertClosures = append(session.beforeInsertClosures, closures)
+		session.beforeClosures = append(session.beforeClosures, closures)
 	}
 	return session
 }
 
-// Apply before update Processor, affected bean is passed to closure arg
-func (session *Session) BeforeUpdate(closures func(interface{})) *Session {
+// Apply after Processor, affected bean is passed to closure arg
+func (session *Session) After(closures func(interface{})) *Session {
 	if closures != nil {
-		session.beforeUpdateClosures = append(session.beforeUpdateClosures, closures)
-	}
-	return session
-}
-
-// Apply before delete Processor, affected bean is passed to closure arg
-func (session *Session) BeforeDelete(closures func(interface{})) *Session {
-	if closures != nil {
-		session.beforeDeleteClosures = append(session.beforeDeleteClosures, closures)
-	}
-	return session
-}
-
-// Apply after insert Processor, affected bean is passed to closure arg
-func (session *Session) AfterInsert(closures func(interface{})) *Session {
-	if closures != nil {
-		session.afterInsertClosures = append(session.afterInsertClosures, closures)
-	}
-	return session
-}
-
-// Apply after update Processor, affected bean is passed to closure arg
-func (session *Session) AfterUpdate(closures func(interface{})) *Session {
-	if closures != nil {
-		session.afterUpdateClosures = append(session.afterUpdateClosures, closures)
-	}
-	return session
-}
-
-// Apply after delete Processor, affected bean is passed to closure arg
-func (session *Session) AfterDelete(closures func(interface{})) *Session {
-	if closures != nil {
-		session.afterDeleteClosures = append(session.afterDeleteClosures, closures)
+		session.afterClosures = append(session.afterClosures, closures)
 	}
 	return session
 }
@@ -324,56 +287,57 @@ func (session *Session) Commit() error {
 		session.Engine.LogSQL("COMMIT")
 		session.IsCommitedOrRollbacked = true
 		var err error
-
 		if err = session.Tx.Commit(); err == nil {
 			// handle processors after tx committed
-			for _, elem := range session.afterInsertBeans {
-				for _, closure := range session.afterInsertClosures {
-					closure(elem)
-				}
 
-				if processor, ok := interface{}(elem).(AfterInsertProcessor); ok {
+			closureCallFunc := func(closuresPtr *[]func(interface{}), bean interface{}) {
+
+				if closuresPtr != nil {
+					for _, closure := range *closuresPtr {
+						closure(bean)
+					}
+				}
+			}
+
+			for bean, closuresPtr := range session.afterInsertBeans {
+				closureCallFunc(closuresPtr, bean)
+
+				if processor, ok := interface{}(bean).(AfterInsertProcessor); ok {
 					processor.AfterInsert()
 				}
 			}
-			for _, elem := range session.afterUpdateBeans {
-				for _, closure := range session.afterUpdateClosures {
-					closure(elem)
-				}
-				if processor, ok := interface{}(elem).(AfterUpdateProcessor); ok {
+			for bean, closuresPtr := range session.afterUpdateBeans {
+				closureCallFunc(closuresPtr, bean)
+
+				if processor, ok := interface{}(bean).(AfterUpdateProcessor); ok {
 					processor.AfterUpdate()
 				}
 			}
-			for _, elem := range session.afterDeleteBeans {
-				for _, closure := range session.afterDeleteClosures {
-					closure(elem)
-				}
-				if processor, ok := interface{}(elem).(AfterDeleteProcessor); ok {
+			for bean, closuresPtr := range session.afterDeleteBeans {
+				closureCallFunc(closuresPtr, bean)
+
+				if processor, ok := interface{}(bean).(AfterDeleteProcessor); ok {
 					processor.AfterDelete()
 				}
 			}
-			cleanUpFunc := func(slices *[]interface{}) {
+			cleanUpFunc := func(slices *map[interface{}]*[]func(interface{})) {
 				if len(*slices) > 0 {
-					*slices = make([]interface{}, 0)
-				}
-			}
-			cleanUpProcessorsFunc := func(slices *[]func(interface{})) {
-				if len(*slices) > 0 {
-					*slices = make([]func(interface{}), 0)
+					*slices = make(map[interface{}]*[]func(interface{}), 0)
 				}
 			}
 			cleanUpFunc(&session.afterInsertBeans)
 			cleanUpFunc(&session.afterUpdateBeans)
 			cleanUpFunc(&session.afterDeleteBeans)
-
-			// !nash! shoule session based processors get cleanup?
-			cleanUpProcessorsFunc(&session.afterInsertClosures)
-			cleanUpProcessorsFunc(&session.afterUpdateClosures)
-			cleanUpProcessorsFunc(&session.afterDeleteClosures)
 		}
 		return err
 	}
 	return nil
+}
+
+func cleanupProcessorsClosures(slices *[]func(interface{})) {
+	if len(*slices) > 0 {
+		*slices = make([]func(interface{}), 0)
+	}
 }
 
 func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]byte) error {
@@ -1347,6 +1311,30 @@ func rows2maps(rows *sql.Rows) (resultsSlice []map[string][]byte, err error) {
 	return resultsSlice, nil
 }
 
+func (session *Session) query(sql string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
+	for _, filter := range session.Engine.Filters {
+		sql = filter.Do(sql, session)
+	}
+
+	session.Engine.LogSQL(sql)
+	session.Engine.LogSQL(paramStr)
+
+	if session.IsAutoCommit {
+		return query(session.Db, sql, paramStr...)
+	}
+	return txQuery(session.Tx, sql, paramStr...)
+}
+
+func txQuery(tx *sql.Tx, sql string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
+	rows, err := tx.Query(sql, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return rows2maps(rows)
+}
+
 func query(db *sql.DB, sql string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
 	s, err := db.Prepare(sql)
 	if err != nil {
@@ -1360,17 +1348,6 @@ func query(db *sql.DB, sql string, params ...interface{}) (resultsSlice []map[st
 	defer rows.Close()
 
 	return rows2maps(rows)
-}
-
-func (session *Session) query(sql string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
-	for _, filter := range session.Engine.Filters {
-		sql = filter.Do(sql, session)
-	}
-
-	session.Engine.LogSQL(sql)
-	session.Engine.LogSQL(paramStr)
-
-	return query(session.Db, sql, paramStr...)
 }
 
 // Exec a raw sql and return records as []map[string][]byte
@@ -1455,7 +1432,8 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 		colPlaces := make([]string, 0)
 
 		// handle BeforeInsertProcessor
-		for _, closure := range session.beforeInsertClosures {
+		// !nashtsai! does user expect it's same slice to passed closure when using Before()/After() when insert multi??
+		for _, closure := range session.beforeClosures {
 			closure(elemValue)
 		}
 
@@ -1521,6 +1499,7 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 		}
 		colMultiPlaces = append(colMultiPlaces, strings.Join(colPlaces, ", "))
 	}
+	cleanupProcessorsClosures(&session.beforeClosures)
 
 	statement := fmt.Sprintf("INSERT INTO %v%v%v (%v%v%v) VALUES (%v)",
 		session.Engine.QuoteStr(),
@@ -1540,28 +1519,36 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 		session.cacheInsert(session.Statement.TableName())
 	}
 
-	hasAfterInsertClosures := len(session.afterInsertClosures) > 0
+	lenAfterClosures := len(session.afterClosures)
 	for i := 0; i < size; i++ {
 		elemValue := sliceValue.Index(i).Interface()
 		// handle AfterInsertProcessor
 		if session.IsAutoCommit {
-			for _, closure := range session.afterInsertClosures {
+			// !nashtsai! does user expect it's same slice to passed closure when using Before()/After() when insert multi??
+			for _, closure := range session.afterClosures {
 				closure(elemValue)
 			}
 			if processor, ok := interface{}(elemValue).(AfterInsertProcessor); ok {
 				processor.AfterInsert()
 			}
 		} else {
-			if hasAfterInsertClosures {
-				session.afterInsertBeans = append(session.afterInsertBeans, elemValue)
+			if lenAfterClosures > 0 {
+				if value, has := session.afterInsertBeans[elemValue]; has && value != nil {
+					*value = append(*value, session.afterClosures...)
+				} else {
+					afterClosures := make([]func(interface{}), lenAfterClosures)
+					copy(afterClosures, session.afterClosures)
+					session.afterInsertBeans[elemValue] = &afterClosures
+				}
+
 			} else {
 				if _, ok := interface{}(elemValue).(AfterInsertProcessor); ok {
-					session.afterInsertBeans = append(session.afterInsertBeans, elemValue)
+					session.afterInsertBeans[elemValue] = nil
 				}
 			}
 		}
 	}
-
+	cleanupProcessorsClosures(&session.afterClosures)
 	return res.RowsAffected()
 }
 
@@ -1673,7 +1660,7 @@ func (session *Session) bytes2Value(col *Column, fieldValue *reflect.Value, data
 		fieldValue.SetUint(x)
 	//Now only support Time type
 	case reflect.Struct:
-		if fieldValue.Type().String() == "time.Time" {
+		if fieldType.String() == "time.Time" {
 			sdata := strings.TrimSpace(string(data))
 			var x time.Time
 			var err error
@@ -1736,6 +1723,264 @@ func (session *Session) bytes2Value(col *Column, fieldValue *reflect.Value, data
 				return errors.New("unsupported struct type in Scan: " + fieldValue.Type().String())
 			}
 		}
+	case reflect.Ptr:
+		// TODO merge duplicated codes above
+		typeStr := fieldType.String()
+		switch typeStr {
+		case "*string":
+			x := string(data)
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*bool":
+			d := string(data)
+			v, err := strconv.ParseBool(d)
+			if err != nil {
+				return errors.New("arg " + key + " as bool: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(v).Addr())
+		case "*complex64":
+			var x complex64
+			err := json.Unmarshal(data, &x)
+			if err != nil {
+				session.Engine.LogSQL(err)
+				return err
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*complex128":
+			var x complex128
+			err := json.Unmarshal(data, &x)
+			if err != nil {
+				session.Engine.LogSQL(err)
+				return err
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*float64":
+			x, err := strconv.ParseFloat(string(data), 64)
+			if err != nil {
+				return errors.New("arg " + key + " as float64: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*float32":
+			var x float32
+			x1, err := strconv.ParseFloat(string(data), 32)
+			if err != nil {
+				return errors.New("arg " + key + " as float32: " + err.Error())
+			}
+			x = float32(x1)
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*time.Time":
+			sdata := strings.TrimSpace(string(data))
+			var x time.Time
+			var err error
+
+			if sdata == "0000-00-00 00:00:00" ||
+				sdata == "0001-01-01 00:00:00" {
+			} else if !strings.ContainsAny(sdata, "- :") {
+				// time stamp
+				sd, err := strconv.ParseInt(sdata, 10, 64)
+				if err == nil {
+					x = time.Unix(0, sd)
+				}
+			} else if len(sdata) > 19 {
+				x, err = time.Parse(time.RFC3339Nano, sdata)
+				if err != nil {
+					x, err = time.Parse("2006-01-02 15:04:05.999999999", sdata)
+				}
+			} else if len(sdata) == 19 {
+				x, err = time.Parse("2006-01-02 15:04:05", sdata)
+			} else if len(sdata) == 10 && sdata[4] == '-' && sdata[7] == '-' {
+				x, err = time.Parse("2006-01-02", sdata)
+			} else if col.SQLType.Name == Time {
+				if len(sdata) > 8 {
+					sdata = sdata[len(sdata)-8:]
+				}
+				st := fmt.Sprintf("2006-01-02 %v", sdata)
+				x, err = time.Parse("2006-01-02 15:04:05", st)
+			} else {
+				return errors.New(fmt.Sprintf("unsupported time format %v", string(data)))
+			}
+			if err != nil {
+				return errors.New(fmt.Sprintf("unsupported time format %v: %v", string(data), err))
+			}
+
+			v = x
+			fieldValue.Set(reflect.ValueOf(v).Addr())
+		case "*uint64":
+			var x uint64
+			x, err := strconv.ParseUint(string(data), 10, 64)
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*uint":
+			var x uint
+			x1, err := strconv.ParseUint(string(data), 10, 64)
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			x = uint(x1)
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*uint32":
+			var x uint32
+			x1, err := strconv.ParseUint(string(data), 10, 64)
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			x = uint32(x1)
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*uint8":
+			var x uint8
+			x1, err := strconv.ParseUint(string(data), 10, 64)
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			x = uint8(x1)
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*uint16":
+			var x uint16
+			x1, err := strconv.ParseUint(string(data), 10, 64)
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			x = uint16(x1)
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*int64":
+			sdata := string(data)
+			var x int64
+			var err error
+			// for mysql, when use bit, it returned \x01
+			if col.SQLType.Name == Bit &&
+				strings.Contains(session.Engine.DriverName, "mysql") {
+				if len(data) == 1 {
+					x = int64(data[0])
+				} else {
+					x = 0
+				}
+				//fmt.Println("######", x, data)
+			} else if strings.HasPrefix(sdata, "0x") {
+				x, err = strconv.ParseInt(sdata, 16, 64)
+			} else if strings.HasPrefix(sdata, "0") {
+				x, err = strconv.ParseInt(sdata, 8, 64)
+			} else {
+				x, err = strconv.ParseInt(sdata, 10, 64)
+			}
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*int":
+			sdata := string(data)
+			var x int
+			var x1 int64
+			var err error
+			// for mysql, when use bit, it returned \x01
+			if col.SQLType.Name == Bit &&
+				strings.Contains(session.Engine.DriverName, "mysql") {
+				if len(data) == 1 {
+					x = int(data[0])
+				} else {
+					x = 0
+				}
+				//fmt.Println("######", x, data)
+			} else if strings.HasPrefix(sdata, "0x") {
+				x1, err = strconv.ParseInt(sdata, 16, 64)
+				x = int(x1)
+			} else if strings.HasPrefix(sdata, "0") {
+				x1, err = strconv.ParseInt(sdata, 8, 64)
+				x = int(x1)
+			} else {
+				x1, err = strconv.ParseInt(sdata, 10, 64)
+				x = int(x1)
+			}
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*int32":
+			sdata := string(data)
+			var x int32
+			var x1 int64
+			var err error
+			// for mysql, when use bit, it returned \x01
+			if col.SQLType.Name == Bit &&
+				strings.Contains(session.Engine.DriverName, "mysql") {
+				if len(data) == 1 {
+					x = int32(data[0])
+				} else {
+					x = 0
+				}
+				//fmt.Println("######", x, data)
+			} else if strings.HasPrefix(sdata, "0x") {
+				x1, err = strconv.ParseInt(sdata, 16, 64)
+				x = int32(x1)
+			} else if strings.HasPrefix(sdata, "0") {
+				x1, err = strconv.ParseInt(sdata, 8, 64)
+				x = int32(x1)
+			} else {
+				x1, err = strconv.ParseInt(sdata, 10, 64)
+				x = int32(x1)
+			}
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*int8":
+			sdata := string(data)
+			var x int8
+			var x1 int64
+			var err error
+			// for mysql, when use bit, it returned \x01
+			if col.SQLType.Name == Bit &&
+				strings.Contains(session.Engine.DriverName, "mysql") {
+				if len(data) == 1 {
+					x = int8(data[0])
+				} else {
+					x = 0
+				}
+				//fmt.Println("######", x, data)
+			} else if strings.HasPrefix(sdata, "0x") {
+				x1, err = strconv.ParseInt(sdata, 16, 64)
+				x = int8(x1)
+			} else if strings.HasPrefix(sdata, "0") {
+				x1, err = strconv.ParseInt(sdata, 8, 64)
+				x = int8(x1)
+			} else {
+				x1, err = strconv.ParseInt(sdata, 10, 64)
+				x = int8(x1)
+			}
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		case "*int16":
+			sdata := string(data)
+			var x int16
+			var x1 int64
+			var err error
+			// for mysql, when use bit, it returned \x01
+			if col.SQLType.Name == Bit &&
+				strings.Contains(session.Engine.DriverName, "mysql") {
+				if len(data) == 1 {
+					x = int16(data[0])
+				} else {
+					x = 0
+				}
+				//fmt.Println("######", x, data)
+			} else if strings.HasPrefix(sdata, "0x") {
+				x1, err = strconv.ParseInt(sdata, 16, 64)
+				x = int16(x1)
+			} else if strings.HasPrefix(sdata, "0") {
+				x1, err = strconv.ParseInt(sdata, 8, 64)
+				x = int16(x1)
+			} else {
+				x1, err = strconv.ParseInt(sdata, 10, 64)
+				x = int16(x1)
+			}
+			if err != nil {
+				return errors.New("arg " + key + " as int: " + err.Error())
+			}
+			fieldValue.Set(reflect.ValueOf(x).Addr())
+		}
+		fallthrough
 	default:
 		return errors.New("unsupported type in Scan: " + reflect.TypeOf(v).String())
 	}
@@ -1755,8 +2000,8 @@ func (session *Session) value2Interface(col *Column, fieldValue reflect.Value) (
 			}
 		}
 	}
-
-	k := fieldValue.Type().Kind()
+	fieldType := fieldValue.Type()
+	k := fieldType.Kind()
 	switch k {
 	case reflect.Bool:
 		if fieldValue.Bool() {
@@ -1767,7 +2012,7 @@ func (session *Session) value2Interface(col *Column, fieldValue reflect.Value) (
 	case reflect.String:
 		return fieldValue.String(), nil
 	case reflect.Struct:
-		if fieldValue.Type().String() == "time.Time" {
+		if fieldType.String() == "time.Time" {
 			if col.SQLType.Name == Time {
 				//s := fieldValue.Interface().(time.Time).Format("2006-01-02 15:04:05 -0700")
 				s := fieldValue.Interface().(time.Time).Format(time.RFC3339)
@@ -1825,6 +2070,60 @@ func (session *Session) value2Interface(col *Column, fieldValue reflect.Value) (
 		} else {
 			return nil, ErrUnSupportedType
 		}
+	case reflect.Ptr:
+		typeStr := fieldType.String()
+		if typeStr == "*string" {
+			if fieldValue.IsNil() {
+				return nil, nil
+			} else {
+				return fieldValue.Elem().String(), nil
+			}
+		} else if typeStr == "*bool" {
+			if fieldValue.IsNil() {
+				return nil, nil
+			} else {
+				return fieldValue.Elem().Bool(), nil
+			}
+		} else if typeStr == "*complex64" || typeStr == "*complex128" {
+			if fieldValue.IsNil() {
+				return nil, nil
+			} else {
+				bytes, err := json.Marshal(fieldValue.Elem().Complex())
+				if err != nil {
+					session.Engine.LogSQL(err)
+					return 0, err
+				}
+				return string(bytes), nil
+			}
+		} else if typeStr == "*float32" || typeStr == "*float64" {
+			if fieldValue.IsNil() {
+				return nil, nil
+			} else {
+				return fieldValue.Elem().Float(), nil
+			}
+		} else if typeStr == "*time.Time" {
+			if fieldValue.IsNil() {
+				return nil, nil
+			} else {
+				if col.SQLType.Name == Time {
+					//s := fieldValue.Interface().(time.Time).Format("2006-01-02 15:04:05 -0700")
+					s := fieldValue.Elem().Interface().(time.Time).Format(time.RFC3339)
+					return s[11:19], nil
+				} else if col.SQLType.Name == Date {
+					return fieldValue.Elem().Interface().(time.Time).Format("2006-01-02"), nil
+				} else if col.SQLType.Name == TimeStampz {
+					return fieldValue.Elem().Interface().(time.Time).Format(time.RFC3339Nano), nil
+				}
+				return fieldValue.Elem().Interface(), nil
+			}
+		} else if typeStr == "*int64" || typeStr == "*uint64" || intTypes.Search(typeStr) < len(intTypes) {
+			if fieldValue.IsNil() {
+				return nil, nil
+			} else {
+				return fieldValue.Elem().Int(), nil
+			}
+		}
+		fallthrough
 	default:
 		return fieldValue.Interface(), nil
 	}
@@ -1835,14 +2134,13 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 	session.Statement.RefTable = table
 
 	// handle BeforeInsertProcessor
-	for _, closure := range session.beforeInsertClosures {
+	for _, closure := range session.beforeClosures {
 		closure(bean)
 	}
+	cleanupProcessorsClosures(&session.beforeClosures) // cleanup after used
+
 	if processor, ok := interface{}(bean).(BeforeInsertProcessor); ok {
-		session.Engine.LogDebug(session.Statement.TableName(), " has before insert processor")
 		processor.BeforeInsert()
-	} else {
-		session.Engine.LogDebug(session.Statement.TableName(), " has no before insert processor")
 	}
 	// --
 
@@ -1866,22 +2164,30 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 	handleAfterInsertProcessorFunc := func(bean interface{}) {
 
 		if session.IsAutoCommit {
-			for _, closure := range session.afterInsertClosures {
+			for _, closure := range session.afterClosures {
 				closure(bean)
 			}
 			if processor, ok := interface{}(bean).(AfterInsertProcessor); ok {
-				session.Engine.LogDebug(session.Statement.TableName(), " has after insert processor")
 				processor.AfterInsert()
 			}
 		} else {
-			if len(session.afterInsertClosures) > 0 {
-				session.afterInsertBeans = append(session.afterInsertBeans, bean)
+			lenAfterClosures := len(session.afterClosures)
+			if lenAfterClosures > 0 {
+				if value, has := session.afterInsertBeans[bean]; has && value != nil {
+					*value = append(*value, session.afterClosures...)
+				} else {
+					afterClosures := make([]func(interface{}), lenAfterClosures)
+					copy(afterClosures, session.afterClosures)
+					session.afterInsertBeans[bean] = &afterClosures
+				}
+
 			} else {
 				if _, ok := interface{}(bean).(AfterInsertProcessor); ok {
-					session.afterInsertBeans = append(session.afterInsertBeans, bean)
+					session.afterInsertBeans[bean] = nil
 				}
 			}
 		}
+		cleanupProcessorsClosures(&session.afterClosures) // cleanup after used
 	}
 
 	// for postgres, many of them didn't implement lastInsertId, so we should
@@ -2169,10 +2475,10 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 	var table *Table
 
 	// handle before update processors
-	for _, closure := range session.beforeUpdateClosures {
+	for _, closure := range session.beforeClosures {
 		closure(bean)
 	}
-
+	cleanupProcessorsClosures(&session.beforeClosures) // cleanup after used
 	if processor, ok := interface{}(bean).(BeforeUpdateProcessor); ok {
 		processor.BeforeUpdate()
 	}
@@ -2278,7 +2584,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 	// handle after update processors
 	if session.IsAutoCommit {
-		for _, closure := range session.afterUpdateClosures {
+		for _, closure := range session.afterClosures {
 			closure(bean)
 		}
 		if processor, ok := interface{}(bean).(AfterUpdateProcessor); ok {
@@ -2286,14 +2592,23 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 			processor.AfterUpdate()
 		}
 	} else {
-		if len(session.afterInsertClosures) > 0 {
-			session.afterUpdateBeans = append(session.afterUpdateBeans, bean)
+		lenAfterClosures := len(session.afterClosures)
+		if lenAfterClosures > 0 {
+			if value, has := session.afterUpdateBeans[bean]; has && value != nil {
+				*value = append(*value, session.afterClosures...)
+			} else {
+				afterClosures := make([]func(interface{}), lenAfterClosures)
+				copy(afterClosures, session.afterClosures)
+				session.afterUpdateBeans[bean] = &afterClosures
+			}
+
 		} else {
-			if _, ok := interface{}(bean).(AfterUpdateProcessor); ok {
-				session.afterUpdateBeans = append(session.afterUpdateBeans, bean)
+			if _, ok := interface{}(bean).(AfterInsertProcessor); ok {
+				session.afterUpdateBeans[bean] = nil
 			}
 		}
 	}
+	cleanupProcessorsClosures(&session.afterClosures) // cleanup after used
 	// --
 
 	return res.RowsAffected()
@@ -2362,9 +2677,10 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	}
 
 	// handle before delete processors
-	for _, closure := range session.beforeDeleteClosures {
+	for _, closure := range session.beforeClosures {
 		closure(bean)
 	}
+	cleanupProcessorsClosures(&session.beforeClosures)
 
 	if processor, ok := interface{}(bean).(BeforeDeleteProcessor); ok {
 		processor.BeforeDelete()
@@ -2405,22 +2721,30 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 
 	// handle after delete processors
 	if session.IsAutoCommit {
-		for _, closure := range session.afterDeleteClosures {
+		for _, closure := range session.afterClosures {
 			closure(bean)
 		}
 		if processor, ok := interface{}(bean).(AfterDeleteProcessor); ok {
-			session.Engine.LogDebug(session.Statement.TableName(), " has after update processor")
 			processor.AfterDelete()
 		}
 	} else {
-		if len(session.afterDeleteClosures) > 0 {
-			session.afterDeleteBeans = append(session.afterDeleteBeans, bean)
+		lenAfterClosures := len(session.afterClosures)
+		if lenAfterClosures > 0 {
+			if value, has := session.afterDeleteBeans[bean]; has && value != nil {
+				*value = append(*value, session.afterClosures...)
+			} else {
+				afterClosures := make([]func(interface{}), lenAfterClosures)
+				copy(afterClosures, session.afterClosures)
+				session.afterDeleteBeans[bean] = &afterClosures
+			}
+
 		} else {
-			if _, ok := interface{}(bean).(AfterDeleteProcessor); ok {
-				session.afterDeleteBeans = append(session.afterDeleteBeans, bean)
+			if _, ok := interface{}(bean).(AfterInsertProcessor); ok {
+				session.afterDeleteBeans[bean] = nil
 			}
 		}
 	}
+	cleanupProcessorsClosures(&session.afterClosures)
 	// --
 
 	return res.RowsAffected()
