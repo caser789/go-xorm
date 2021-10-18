@@ -875,6 +875,7 @@ func (session *Session) Iterate(bean interface{}, fun IterFunc) error {
 // get retrieve one record from database, bean's non-empty fields
 // will be as conditions
 func (session *Session) Get(bean interface{}) (bool, error) {
+
 	err := session.newDb()
 	if err != nil {
 		return false, err
@@ -889,6 +890,7 @@ func (session *Session) Get(bean interface{}) (bool, error) {
 	var sql string
 	var args []interface{}
 	session.Statement.RefTable = session.Engine.autoMap(bean)
+
 	if session.Statement.RawSQL == "" {
 		sql, args = session.Statement.genGetSql(bean)
 	} else {
@@ -1000,7 +1002,7 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 
 	if len(condiBean) > 0 {
 		colNames, args := buildConditions(session.Engine, table, condiBean[0], true,
-			session.Statement.allUseBool, session.Statement.boolColumnMap)
+			session.Statement.allUseBool, false, session.Statement.boolColumnMap)
 		session.Statement.ConditionStr = strings.Join(colNames, " AND ")
 		session.Statement.BeanArgs = args
 	}
@@ -1724,7 +1726,7 @@ func (session *Session) bytes2Value(col *Column, fieldValue *reflect.Value, data
 			}
 		}
 	case reflect.Ptr:
-		// TODO merge duplicated codes above
+		// !nashtsai! TODO merge duplicated codes above
 		typeStr := fieldType.String()
 		switch typeStr {
 		case "*string":
@@ -2003,6 +2005,20 @@ func (session *Session) value2Interface(col *Column, fieldValue reflect.Value) (
 	}
 	fieldType := fieldValue.Type()
 	k := fieldType.Kind()
+	if k == reflect.Ptr {
+		if fieldValue.IsNil() {
+			return nil, nil
+		} else if !fieldValue.IsValid() {
+			session.Engine.LogWarn("the field[", col.FieldName, "] is invalid")
+			return nil, nil
+		} else {
+			// !nashtsai! deference pointer type to instance type
+			fieldValue = fieldValue.Elem()
+			fieldType = fieldValue.Type()
+			k = fieldType.Kind()
+		}
+	}
+
 	switch k {
 	case reflect.Bool:
 		if fieldValue.Bool() {
@@ -2071,67 +2087,6 @@ func (session *Session) value2Interface(col *Column, fieldValue reflect.Value) (
 		} else {
 			return nil, ErrUnSupportedType
 		}
-	case reflect.Ptr:
-		typeStr := fieldType.String()
-		if typeStr == "*string" {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				return fieldValue.Elem().String(), nil
-			}
-		} else if typeStr == "*bool" {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				return fieldValue.Elem().Bool(), nil
-			}
-		} else if typeStr == "*complex64" || typeStr == "*complex128" {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				bytes, err := json.Marshal(fieldValue.Elem().Complex())
-				if err != nil {
-					session.Engine.LogSQL(err)
-					return 0, err
-				}
-				return string(bytes), nil
-			}
-		} else if typeStr == "*float32" || typeStr == "*float64" {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				return fieldValue.Elem().Float(), nil
-			}
-		} else if typeStr == "*time.Time" {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				if col.SQLType.Name == Time {
-					//s := fieldValue.Interface().(time.Time).Format("2006-01-02 15:04:05 -0700")
-					s := fieldValue.Elem().Interface().(time.Time).Format(time.RFC3339)
-					return s[11:19], nil
-				} else if col.SQLType.Name == Date {
-					return fieldValue.Elem().Interface().(time.Time).Format("2006-01-02"), nil
-				} else if col.SQLType.Name == TimeStampz {
-					return fieldValue.Elem().Interface().(time.Time).Format(time.RFC3339Nano), nil
-				}
-				return fieldValue.Elem().Interface(), nil
-			}
-		} else if typeStr == "*int64" || intTypes.Search(typeStr) < len(intTypes) {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				return fieldValue.Elem().Int(), nil
-			}
-		} else if typeStr == "*uint64" || uintTypes.Search(typeStr) < len(uintTypes) {
-			if fieldValue.IsNil() {
-				return nil, nil
-			} else {
-				return fieldValue.Elem().Uint(), nil
-			}
-		}
-
-		fallthrough
 	default:
 		return fieldValue.Interface(), nil
 	}
@@ -2498,7 +2453,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 		if session.Statement.ColumnStr == "" {
 			colNames, args = buildConditions(session.Engine, table, bean, false,
-				session.Statement.allUseBool, session.Statement.boolColumnMap)
+				session.Statement.allUseBool, true, session.Statement.boolColumnMap)
 		} else {
 			colNames, args, err = table.genCols(session, bean, true, true)
 			if err != nil {
@@ -2532,7 +2487,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 	if len(condiBean) > 0 {
 		condiColNames, condiArgs = buildConditions(session.Engine, session.Statement.RefTable, condiBean[0], true,
-			session.Statement.allUseBool, session.Statement.boolColumnMap)
+			session.Statement.allUseBool, false, session.Statement.boolColumnMap)
 	}
 
 	var condition = ""
@@ -2698,7 +2653,7 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	table := session.Engine.autoMap(bean)
 	session.Statement.RefTable = table
 	colNames, args := buildConditions(session.Engine, table, bean, true,
-		session.Statement.allUseBool, session.Statement.boolColumnMap)
+		session.Statement.allUseBool, false, session.Statement.boolColumnMap)
 
 	var condition = ""
 	if session.Statement.WhereStr != "" {
