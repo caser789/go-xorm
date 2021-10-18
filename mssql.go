@@ -16,16 +16,30 @@ type mssql struct {
 	quoteFilter Filter
 }
 
-type mssqlParser struct {
+type odbcParser struct {
 }
 
-func (p *mssqlParser) parse(driverName, dataSourceName string) (*uri, error) {
-	return &uri{dbName: "xorm_test", dbType: MSSQL}, nil
+func (p *odbcParser) parse(driverName, dataSourceName string) (*uri, error) {
+	kv := strings.Split(dataSourceName, ";")
+	var dbName string
+	for _, c := range kv {
+		vv := strings.Split(strings.TrimSpace(c), "=")
+		if len(vv) == 2 {
+			switch strings.ToLower(vv[0]) {
+			case "database":
+				dbName = vv[1]
+			}
+		}
+	}
+	if dbName == "" {
+		return nil, errors.New("no db name provided")
+	}
+	return &uri{dbName: dbName, dbType: MSSQL}, nil
 }
 
 func (db *mssql) Init(drivername, uri string) error {
 	db.quoteFilter = &QuoteFilter{}
-	return db.base.init(&mssqlParser{}, drivername, uri)
+	return db.base.init(&odbcParser{}, drivername, uri)
 }
 
 func (db *mssql) SqlType(c *Column) string {
@@ -147,11 +161,13 @@ where a.object_id=object_id('` + tableName + `')`
 				switch ct {
 				case "DATETIMEOFFSET":
 					col.SQLType = SQLType{TimeStampz, 0, 0}
+				case "NVARCHAR":
+					col.SQLType = SQLType{Varchar, 0, 0}
 				default:
 					if _, ok := sqlTypes[ct]; ok {
 						col.SQLType = SQLType{ct, 0, 0}
 					} else {
-						return nil, nil, errors.New(fmt.Sprintf("unknow colType %v", ct))
+						return nil, nil, errors.New(fmt.Sprintf("unknow colType %v for %v", ct, col))
 					}
 				}
 
@@ -229,7 +245,6 @@ WHERE IXS.TYPE_DESC='NONCLUSTERED' and OBJECT_NAME(IXS.OBJECT_ID) =?
 
 	indexes := make(map[string]*Index, 0)
 	for _, record := range res {
-		fmt.Println("-----", record, "-----")
 		var indexType int
 		var indexName, colName string
 		for name, content := range record {
@@ -239,8 +254,6 @@ WHERE IXS.TYPE_DESC='NONCLUSTERED' and OBJECT_NAME(IXS.OBJECT_ID) =?
 				if err != nil {
 					return nil, err
 				}
-
-				fmt.Println(name, string(content), i)
 
 				if i {
 					indexType = UniqueType
@@ -267,7 +280,6 @@ WHERE IXS.TYPE_DESC='NONCLUSTERED' and OBJECT_NAME(IXS.OBJECT_ID) =?
 			indexes[indexName] = index
 		}
 		index.AddColumn(colName)
-		fmt.Print("------end------")
 	}
 	return indexes, nil
 }

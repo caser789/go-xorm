@@ -476,7 +476,7 @@ func (engine *Engine) mapType(t reflect.Type) *Table {
 						table.ColumnsSeq = append(table.ColumnsSeq, name)
 					}
 
-					table.PrimaryKey = parentTable.PrimaryKey
+					table.PrimaryKeys = parentTable.PrimaryKeys
 					continue
 				}
 				var indexType int
@@ -597,17 +597,18 @@ func (engine *Engine) mapType(t reflect.Type) *Table {
 
 		table.AddColumn(col)
 
-		if col.FieldName == "Id" || strings.HasSuffix(col.FieldName, ".Id") {
+		if fieldType.Kind() == reflect.Int64 && (col.FieldName == "Id" || strings.HasSuffix(col.FieldName, ".Id")) {
 			idFieldColName = col.Name
 		}
 	}
 
-	if idFieldColName != "" && table.PrimaryKey == "" {
+	if idFieldColName != "" && len(table.PrimaryKeys) == 0 {
 		col := table.Columns[idFieldColName]
 		col.IsPrimaryKey = true
 		col.IsAutoIncrement = true
 		col.Nullable = false
-		table.PrimaryKey = col.Name
+		table.PrimaryKeys = append(table.PrimaryKeys, col.Name)
+		table.AutoIncrement = col.Name
 	}
 
 	return table

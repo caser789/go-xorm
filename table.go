@@ -115,8 +115,27 @@ var (
 	uintTypes = sort.StringSlice{"*uint", "*uint16", "*uint32", "*uint8"}
 )
 
-var b byte
-var tm time.Time
+// !nashtsai! treat following var as interal const values, these are used for reflect.TypeOf comparision
+var (
+	c_EMPTY_STRING       string
+	c_BOOL_DEFAULT       bool
+	c_BYTE_DEFAULT       byte
+	c_COMPLEX64_DEFAULT  complex64
+	c_COMPLEX128_DEFAULT complex128
+	c_FLOAT32_DEFAULT    float32
+	c_FLOAT64_DEFAULT    float64
+	c_INT64_DEFAULT      int64
+	c_UINT64_DEFAULT     uint64
+	c_INT32_DEFAULT      int32
+	c_UINT32_DEFAULT     uint32
+	c_INT16_DEFAULT      int16
+	c_UINT16_DEFAULT     uint16
+	c_INT8_DEFAULT       int8
+	c_UINT8_DEFAULT      uint8
+	c_INT_DEFAULT        int
+	c_UINT_DEFAULT       uint
+	c_TIME_DEFAULT       time.Time
+)
 
 func Type2SQLType(t reflect.Type) (st SQLType) {
 	switch k := t.Kind(); k {
@@ -131,7 +150,7 @@ func Type2SQLType(t reflect.Type) (st SQLType) {
 	case reflect.Complex64, reflect.Complex128:
 		st = SQLType{Varchar, 64, 0}
 	case reflect.Array, reflect.Slice, reflect.Map:
-		if t.Elem() == reflect.TypeOf(b) {
+		if t.Elem() == reflect.TypeOf(c_BYTE_DEFAULT) {
 			st = SQLType{Blob, 0, 0}
 		} else {
 			st = SQLType{Text, 0, 0}
@@ -141,7 +160,7 @@ func Type2SQLType(t reflect.Type) (st SQLType) {
 	case reflect.String:
 		st = SQLType{Varchar, 255, 0}
 	case reflect.Struct:
-		if t == reflect.TypeOf(tm) {
+		if t == reflect.TypeOf(c_TIME_DEFAULT) {
 			st = SQLType{DateTime, 0, 0}
 		} else {
 			st = SQLType{Text, 0, 0}
@@ -200,7 +219,7 @@ func SQLType2Type(st SQLType) reflect.Type {
 	case Bool:
 		return reflect.TypeOf(true)
 	case DateTime, Date, Time, TimeStamp, TimeStampz:
-		return reflect.TypeOf(tm)
+		return reflect.TypeOf(c_TIME_DEFAULT)
 	case Decimal, Numeric:
 		return reflect.TypeOf("")
 	default:
@@ -320,16 +339,17 @@ func (col *Column) ValueOf(bean interface{}) reflect.Value {
 
 // database table
 type Table struct {
-	Name       string
-	Type       reflect.Type
-	ColumnsSeq []string
-	Columns    map[string]*Column
-	Indexes    map[string]*Index
-	PrimaryKey string
-	Created    map[string]bool
-	Updated    string
-	Version    string
-	Cacher     Cacher
+	Name          string
+	Type          reflect.Type
+	ColumnsSeq    []string
+	Columns       map[string]*Column
+	Indexes       map[string]*Index
+	PrimaryKeys   []string
+	AutoIncrement string
+	Created       map[string]bool
+	Updated       string
+	Version       string
+	Cacher        Cacher
 }
 
 /*
@@ -343,8 +363,16 @@ func NewTable(name string, t reflect.Type) *Table {
 }*/
 
 // if has primary key, return column
-func (table *Table) PKColumn() *Column {
-	return table.Columns[table.PrimaryKey]
+func (table *Table) PKColumns() []*Column {
+	columns := make([]*Column, 0)
+	for _, name := range table.PrimaryKeys {
+		columns = append(columns, table.Columns[name])
+	}
+	return columns
+}
+
+func (table *Table) AutoIncrColumn() *Column {
+	return table.Columns[table.AutoIncrement]
 }
 
 func (table *Table) VersionColumn() *Column {
@@ -356,7 +384,10 @@ func (table *Table) AddColumn(col *Column) {
 	table.ColumnsSeq = append(table.ColumnsSeq, col.Name)
 	table.Columns[col.Name] = col
 	if col.IsPrimaryKey {
-		table.PrimaryKey = col.Name
+		table.PrimaryKeys = append(table.PrimaryKeys, col.Name)
+	}
+	if col.IsAutoIncrement {
+		table.AutoIncrement = col.Name
 	}
 	if col.IsCreated {
 		table.Created[col.Name] = true
@@ -389,8 +420,21 @@ func (table *Table) genCols(session *Session, bean interface{}, useCol bool, inc
 		}
 
 		fieldValue := col.ValueOf(bean)
-		if col.IsAutoIncrement && fieldValue.Int() == 0 {
-			continue
+		if col.IsAutoIncrement {
+			switch fieldValue.Type().Kind() {
+			case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int, reflect.Int64:
+				if fieldValue.Int() == 0 {
+					continue
+				}
+			case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint, reflect.Uint64:
+				if fieldValue.Uint() == 0 {
+					continue
+				}
+			case reflect.String:
+				if len(fieldValue.String()) == 0 {
+					continue
+				}
+			}
 		}
 
 		if session.Statement.ColumnStr != "" {

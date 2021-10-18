@@ -1,33 +1,13 @@
 package xorm
 
 import (
+	//"bytes"
 	"fmt"
 	"reflect"
 	//"strconv"
 	"encoding/json"
 	"strings"
 	"time"
-)
-
-// !nashtsai! treat following var as interal const values
-var (
-	c_EMPTY_STRING                 = ""
-	c_BOOL_DEFAULT                 = false
-	c_COMPLEX64_DEFAULT            = complex64(0)
-	c_COMPLEX128_DEFAULT           = complex128(0)
-	c_FLOAT32_DEFAULT              = float32(0)
-	c_FLOAT64_DEFAULT              = float64(0)
-	c_INT64_DEFAULT                = int64(0)
-	c_UINT64_DEFAULT               = uint64(0)
-	c_INT32_DEFAULT                = int32(0)
-	c_UINT32_DEFAULT               = uint32(0)
-	c_INT16_DEFAULT                = int16(0)
-	c_UINT16_DEFAULT               = uint16(0)
-	c_INT8_DEFAULT                 = int8(0)
-	c_UINT8_DEFAULT                = uint8(0)
-	c_INT_DEFAULT                  = int(0)
-	c_UINT_DEFAULT                 = uint(0)
-	c_TIME_DEFAULT       time.Time = time.Unix(0, 0)
 )
 
 // statement save all the sql info for executing SQL
@@ -274,7 +254,7 @@ func buildConditions(engine *Engine, table *Table, bean interface{},
 			continue
 		}
 		//
-		fmt.Println(engine.dialect.DBType(), Text)
+		//fmt.Println(engine.dialect.DBType(), Text)
 		if engine.dialect.DBType() == MSSQL && col.SQLType.Name == Text {
 			continue
 		}
@@ -355,11 +335,15 @@ func buildConditions(engine *Engine, table *Table, bean interface{},
 			} else {
 				engine.autoMapType(fieldValue.Type())
 				if table, ok := engine.Tables[fieldValue.Type()]; ok {
-					pkField := reflect.Indirect(fieldValue).FieldByName(table.PKColumn().FieldName)
-					if pkField.Int() != 0 {
-						val = pkField.Interface()
+					if len(table.PrimaryKeys) == 1 {
+						pkField := reflect.Indirect(fieldValue).FieldByName(table.PKColumns()[0].FieldName)
+						if pkField.Int() != 0 {
+							val = pkField.Interface()
+						} else {
+							continue
+						}
 					} else {
-						continue
+						//TODO: how to handler?
 					}
 				} else {
 					val = fieldValue.Interface()
@@ -725,7 +709,6 @@ func (s *Statement) genDropSQL() string {
 	}
 }
 
-// !nashtsai! REVIEW, Statement is a huge struct why is this method not passing *Statement?
 func (statement *Statement) genGetSql(bean interface{}) (string, []interface{}) {
 	table := statement.Engine.autoMap(bean)
 	statement.RefTable = table
@@ -774,9 +757,10 @@ func (statement *Statement) genCountSql(bean interface{}) (string, []interface{}
 
 	statement.ConditionStr = strings.Join(colNames, " AND ")
 	statement.BeanArgs = args
-	var id string = "*"
-	if table.PrimaryKey != "" {
-		id = statement.Engine.Quote(table.PrimaryKey)
+	// count(index fieldname) > count(0) > count(*)
+	var id string = "0"
+	if len(table.PrimaryKeys) == 1 {
+		id = statement.Engine.Quote(table.PrimaryKeys[0])
 	}
 	return statement.genSelectSql(fmt.Sprintf("COUNT(%v) AS %v", id, statement.Engine.Quote("total"))), append(statement.Params, statement.BeanArgs...)
 }
