@@ -58,6 +58,18 @@ func (session *Session) Where(querystring string, args ...interface{}) *Session 
 	return session
 }
 
+// Method Where provides custom query condition.
+func (session *Session) And(querystring string, args ...interface{}) *Session {
+	session.Statement.And(querystring, args...)
+	return session
+}
+
+// Method Where provides custom query condition.
+func (session *Session) Or(querystring string, args ...interface{}) *Session {
+	session.Statement.Or(querystring, args...)
+	return session
+}
+
 // Method Id provides converting id as a query condition
 func (session *Session) Id(id int64) *Session {
 	session.Statement.Id(id)
@@ -79,6 +91,11 @@ func (session *Session) In(column string, args ...interface{}) *Session {
 // Method Cols provides some columns to special
 func (session *Session) Cols(columns ...string) *Session {
 	session.Statement.Cols(columns...)
+	return session
+}
+
+func (session *Session) Distinct(columns ...string) *Session {
+	session.Statement.Distinct(columns...)
 	return session
 }
 
@@ -226,7 +243,7 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 		return errors.New("Expected a pointer to a struct")
 	}
 
-	table := session.Engine.Tables[rType(obj)]
+	table := session.Engine.AutoMapType(rType(obj))
 
 	for key, data := range objMap {
 		if _, ok := table.Columns[key]; !ok {
@@ -836,18 +853,22 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 
 	sliceElementType := sliceValue.Type().Elem()
 	var table *Table
-	if sliceElementType.Kind() == reflect.Ptr {
-		if sliceElementType.Elem().Kind() == reflect.Struct {
-			table = session.Engine.AutoMapType(sliceElementType.Elem())
+	if session.Statement.RefTable == nil {
+		if sliceElementType.Kind() == reflect.Ptr {
+			if sliceElementType.Elem().Kind() == reflect.Struct {
+				table = session.Engine.AutoMapType(sliceElementType.Elem())
+			} else {
+				return errors.New("slice type")
+			}
+		} else if sliceElementType.Kind() == reflect.Struct {
+			table = session.Engine.AutoMapType(sliceElementType)
 		} else {
 			return errors.New("slice type")
 		}
-	} else if sliceElementType.Kind() == reflect.Struct {
-		table = session.Engine.AutoMapType(sliceElementType)
+		session.Statement.RefTable = table
 	} else {
-		return errors.New("slice type")
+		table = session.Statement.RefTable
 	}
-	session.Statement.RefTable = table
 
 	if len(condiBean) > 0 {
 		colNames, args := buildConditions(session.Engine, table, condiBean[0], true)
@@ -869,7 +890,9 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 		args = session.Statement.RawParams
 	}
 
-	if table.Cacher != nil && session.Statement.UseCache {
+	if table.Cacher != nil &&
+		session.Statement.UseCache &&
+		!session.Statement.IsDistinct {
 		err = session.cacheFind(sliceElementType, sql, rowsSlicePtr, args...)
 		if err != ErrCacheFailed {
 			return err
@@ -1627,14 +1650,15 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 		}
 
 		var id int64 = 0
-		pkValue := table.PKColumn().ValueOf(bean)
-		if !pkValue.IsValid() || pkValue.Int() != 0 || !pkValue.CanSet() {
-			return 0, nil
-		}
 
 		id, err = res.LastInsertId()
 		if err != nil || id <= 0 {
 			return 0, err
+		}
+
+		pkValue := table.PKColumn().ValueOf(bean)
+		if !pkValue.IsValid() || pkValue.Int() != 0 || !pkValue.CanSet() {
+			return id, nil
 		}
 
 		var v interface{} = id
@@ -1654,23 +1678,23 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 			return 0, err
 		}
 
-		if len(res) < 1 {
-			return 0, err
-		}
-
 		if table.Cacher != nil && session.Statement.UseCache {
 			session.cacheInsert(session.Statement.TableName())
 		}
 
-		pkValue := table.PKColumn().ValueOf(bean)
-		if !pkValue.IsValid() || pkValue.Int() != 0 || !pkValue.CanSet() {
-			return 0, nil
+		if len(res) < 1 {
+			return 0, errors.New("insert no error but not returned id")
 		}
 
 		idByte := res[0][table.PrimaryKey]
 		id, err := strconv.ParseInt(string(idByte), 10, 64)
 		if err != nil {
 			return 0, err
+		}
+
+		pkValue := table.PKColumn().ValueOf(bean)
+		if !pkValue.IsValid() || pkValue.Int() != 0 || !pkValue.CanSet() {
+			return id, nil
 		}
 
 		var v interface{} = id

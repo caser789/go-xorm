@@ -34,6 +34,7 @@ type Statement struct {
 	BeanArgs     []interface{}
 	UseCache     bool
 	UseAutoTime  bool
+	IsDistinct   bool
 }
 
 func (statement *Statement) Init() {
@@ -57,6 +58,7 @@ func (statement *Statement) Init() {
 	statement.BeanArgs = make([]interface{}, 0)
 	statement.UseCache = statement.Engine.UseCache
 	statement.UseAutoTime = true
+	statement.IsDistinct = false
 }
 
 func (statement *Statement) Sql(querystring string, args ...interface{}) {
@@ -67,6 +69,24 @@ func (statement *Statement) Sql(querystring string, args ...interface{}) {
 func (statement *Statement) Where(querystring string, args ...interface{}) {
 	statement.WhereStr = querystring
 	statement.Params = args
+}
+
+func (statement *Statement) And(querystring string, args ...interface{}) {
+	if statement.WhereStr != "" {
+		statement.WhereStr = fmt.Sprintf("(%v) AND (%v)", statement.WhereStr, querystring)
+	} else {
+		statement.WhereStr = querystring
+	}
+	statement.Params = append(statement.Params, args...)
+}
+
+func (statement *Statement) Or(querystring string, args ...interface{}) {
+	if statement.WhereStr != "" {
+		statement.WhereStr = fmt.Sprintf("(%v) OR (%v)", statement.WhereStr, querystring)
+	} else {
+		statement.WhereStr = querystring
+	}
+	statement.Params = append(statement.Params, args...)
 }
 
 func (statement *Statement) Table(tableNameOrBean interface{}) {
@@ -226,6 +246,11 @@ func col2NewCols(columns ...string) []string {
 		}
 	}
 	return newColumns
+}
+
+func (statement *Statement) Distinct(columns ...string) {
+	statement.IsDistinct = true
+	statement.Cols(columns...)
 }
 
 func (statement *Statement) Cols(columns ...string) {
@@ -423,7 +448,11 @@ func (statement Statement) genSelectSql(columnStr string) (a string) {
 		columnStr = statement.Engine.Quote(strings.Replace(statement.GroupByStr, ",", statement.Engine.Quote(","), -1))
 		statement.GroupByStr = columnStr
 	}
-	a = fmt.Sprintf("SELECT %v FROM %v", columnStr,
+	var distinct string
+	if statement.IsDistinct {
+		distinct = "DISTINCT "
+	}
+	a = fmt.Sprintf("SELECT %v%v FROM %v", distinct, columnStr,
 		statement.Engine.Quote(statement.TableName()))
 	if statement.JoinStr != "" {
 		a = fmt.Sprintf("%v %v", a, statement.JoinStr)
