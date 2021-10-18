@@ -18,8 +18,9 @@ const (
 	MYMYSQL  = "mymysql"
 )
 
+// a dialect is a driver's wrapper
 type dialect interface {
-	Init(uri string) error
+	Init(DriverName, DataSourceName string) error
 	SqlType(t *Column) string
 	SupportInsertMany() bool
 	QuoteStr() string
@@ -30,6 +31,10 @@ type dialect interface {
 	IndexCheckSql(tableName, idxName string) (string, []interface{})
 	TableCheckSql(tableName string) (string, []interface{})
 	ColumnCheckSql(tableName, colName string) (string, []interface{})
+
+	GetColumns(tableName string) (map[string]*Column, error)
+	GetTables() ([]*Table, error)
+	GetIndexes(tableName string) (map[string]*Index, error)
 }
 
 type Engine struct {
@@ -37,12 +42,13 @@ type Engine struct {
 	TagIdentifier  string
 	DriverName     string
 	DataSourceName string
-	Dialect        dialect
+	dialect        dialect
 	Tables         map[reflect.Type]*Table
 	mutex          *sync.Mutex
 	ShowSQL        bool
 	ShowErr        bool
 	ShowDebug      bool
+	ShowWarn       bool
 	Pool           IConnectPool
 	Filters        []Filter
 	Logger         io.Writer
@@ -50,36 +56,47 @@ type Engine struct {
 	UseCache       bool
 }
 
+// If engine's database support batch insert records like
+// "insert into user values (name, age), (name, age)".
+// When the return is ture, then engine.Insert(&users) will
+// generate batch sql and exeute.
 func (engine *Engine) SupportInsertMany() bool {
-	return engine.Dialect.SupportInsertMany()
+	return engine.dialect.SupportInsertMany()
 }
 
+// Engine's database use which charactor as quote.
+// mysql, sqlite use ` and postgres use "
 func (engine *Engine) QuoteStr() string {
-	return engine.Dialect.QuoteStr()
+	return engine.dialect.QuoteStr()
 }
 
+// Use QuoteStr quote the string sql
 func (engine *Engine) Quote(sql string) string {
-	return engine.Dialect.QuoteStr() + sql + engine.Dialect.QuoteStr()
+	return engine.dialect.QuoteStr() + sql + engine.dialect.QuoteStr()
 }
 
+// A simple wrapper to dialect's SqlType method
 func (engine *Engine) SqlType(c *Column) string {
-	return engine.Dialect.SqlType(c)
+	return engine.dialect.SqlType(c)
 }
 
+// Database's autoincrement statement
 func (engine *Engine) AutoIncrStr() string {
-	return engine.Dialect.AutoIncrStr()
+	return engine.dialect.AutoIncrStr()
 }
 
+// Set engine's pool, the pool default is Go's standard library's connection pool.
 func (engine *Engine) SetPool(pool IConnectPool) error {
 	engine.Pool = pool
 	return engine.Pool.Init(engine)
 }
 
-// only for go 1.2+
+// SetMaxConns is only available for go 1.2+
 func (engine *Engine) SetMaxConns(conns int) {
 	engine.Pool.SetMaxConns(conns)
 }
 
+// SetDefaltCacher set the default cacher. Xorm's default not enable cacher.
 func (engine *Engine) SetDefaultCacher(cacher Cacher) {
 	if cacher == nil {
 		engine.UseCache = false
@@ -89,32 +106,39 @@ func (engine *Engine) SetDefaultCacher(cacher Cacher) {
 	}
 }
 
+// If you has set default cacher, and you want temporilly stop use cache,
+// you can use NoCache()
 func (engine *Engine) NoCache() *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.NoCache()
 }
 
+// Set a table use a special cacher
 func (engine *Engine) MapCacher(bean interface{}, cacher Cacher) {
 	t := rType(bean)
 	engine.AutoMapType(t)
 	engine.Tables[t].Cacher = cacher
 }
 
-func (e *Engine) OpenDB() (*sql.DB, error) {
-	return sql.Open(e.DriverName, e.DataSourceName)
+// OpenDB provides a interface to operate database directly.
+func (engine *Engine) OpenDB() (*sql.DB, error) {
+	return sql.Open(engine.DriverName, engine.DataSourceName)
 }
 
+// New a session
 func (engine *Engine) NewSession() *Session {
 	session := &Session{Engine: engine}
 	session.Init()
 	return session
 }
 
+// Close the engine
 func (engine *Engine) Close() error {
 	return engine.Pool.Close(engine)
 }
 
+// Test if database is alive.
 func (engine *Engine) Test() error {
 	session := engine.NewSession()
 	defer session.Close()
@@ -140,6 +164,12 @@ func (engine *Engine) LogDebug(contents ...interface{}) {
 	}
 }
 
+func (engine *Engine) LogWarn(contents ...interface{}) {
+	if engine.ShowWarn {
+		io.WriteString(engine.Logger, fmt.Sprintln(contents...))
+	}
+}
+
 func (engine *Engine) Sql(querystring string, args ...interface{}) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
@@ -150,6 +180,28 @@ func (engine *Engine) NoAutoTime() *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.NoAutoTime()
+}
+
+func (engine *Engine) DBMetas() ([]*Table, error) {
+	tables, err := engine.dialect.GetTables()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, table := range tables {
+		cols, err := engine.dialect.GetColumns(table.Name)
+		if err != nil {
+			return nil, err
+		}
+		table.Columns = cols
+
+		indexes, err := engine.dialect.GetIndexes(table.Name)
+		if err != nil {
+			return nil, err
+		}
+		table.Indexes = indexes
+	}
+	return tables, nil
 }
 
 func (engine *Engine) Cascade(trueOrFalse ...bool) *Session {
@@ -249,7 +301,7 @@ func (engine *Engine) Having(conditions string) *Session {
 	return session.Having(conditions)
 }
 
-// some lock needed
+//
 func (engine *Engine) AutoMapType(t reflect.Type) *Table {
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
@@ -267,7 +319,8 @@ func (engine *Engine) AutoMap(bean interface{}) *Table {
 }
 
 func (engine *Engine) newTable() *Table {
-	table := &Table{Indexes: map[string][]string{}, Uniques: map[string][]string{}}
+	table := &Table{}
+	table.Indexes = make(map[string]*Index)
 	table.Columns = make(map[string]*Column)
 	table.ColumnsSeq = make([]string, 0)
 	table.Cacher = engine.Cacher
@@ -289,7 +342,7 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 
 		if ormTagStr != "" {
 			col = &Column{FieldName: t.Field(i).Name, Nullable: true, IsPrimaryKey: false,
-				IsAutoIncrement: false, MapType: TWOSIDES}
+				IsAutoIncrement: false, MapType: TWOSIDES, Indexes: make(map[string]bool)}
 			tags := strings.Split(ormTagStr, " ")
 
 			if len(tags) > 0 {
@@ -308,6 +361,8 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 					table.PrimaryKey = parentTable.PrimaryKey
 					continue
 				}
+				var indexType int
+				var indexName string
 				for j, key := range tags {
 					k := strings.ToUpper(key)
 					switch {
@@ -328,22 +383,20 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 						col.IsCreated = true
 					case k == "UPDATED":
 						col.IsUpdated = true
-					case strings.HasPrefix(k, "INDEX"):
-						if k == "INDEX" {
-							col.IndexName = ""
-							col.IndexType = SINGLEINDEX
-						} else {
-							col.IndexName = k[len("INDEX")+1 : len(k)-1]
-							col.IndexType = UNIONINDEX
-						}
-					case strings.HasPrefix(k, "UNIQUE"):
-						if k == "UNIQUE" {
-							col.UniqueName = ""
-							col.UniqueType = SINGLEUNIQUE
-						} else {
-							col.UniqueName = k[len("UNIQUE")+1 : len(k)-1]
-							col.UniqueType = UNIONUNIQUE
-						}
+					/*case strings.HasPrefix(k, "--"):
+					col.Comment = k[2:len(k)]*/
+					case strings.HasPrefix(k, "INDEX(") && strings.HasSuffix(k, ")"):
+						indexType = IndexType
+						indexName = k[len("INDEX")+1 : len(k)-1]
+					case k == "INDEX":
+						indexType = IndexType
+					case strings.HasPrefix(k, "UNIQUE(") && strings.HasSuffix(k, ")"):
+						indexName = k[len("UNIQUE")+1 : len(k)-1]
+						indexType = UniqueType
+					case k == "UNIQUE":
+						indexType = UniqueType
+					case k == "NOTNULL":
+						col.Nullable = false
 					case k == "NOT":
 					default:
 						if strings.HasPrefix(k, "'") && strings.HasSuffix(k, "'") {
@@ -376,60 +429,53 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 				if col.SQLType.Name == "" {
 					col.SQLType = Type2SQLType(fieldType)
 				}
-
 				if col.Length == 0 {
 					col.Length = col.SQLType.DefaultLength
 				}
 				if col.Length2 == 0 {
 					col.Length2 = col.SQLType.DefaultLength2
 				}
-
 				if col.Name == "" {
 					col.Name = engine.Mapper.Obj2Table(t.Field(i).Name)
 				}
-				if col.IsPrimaryKey {
-					table.PrimaryKey = col.Name
-				}
-				if col.IsCreated {
-					table.Created = col.Name
-				}
-				if col.IsUpdated {
-					table.Updated = col.Name
-				}
-				if col.IndexType == SINGLEINDEX {
-					col.IndexName = col.Name
-					table.Indexes[col.IndexName] = []string{col.Name}
-				} else if col.IndexType == UNIONINDEX {
-					if unionIdxes, ok := table.Indexes[col.IndexName]; ok {
-						table.Indexes[col.IndexName] = append(unionIdxes, col.Name)
-					} else {
-						table.Indexes[col.IndexName] = []string{col.Name}
+				if indexType == IndexType {
+					if indexName == "" {
+						indexName = col.Name
 					}
-				}
-
-				if col.UniqueType == SINGLEUNIQUE {
-					col.UniqueName = col.Name
-					table.Uniques[col.UniqueName] = []string{col.Name}
-				} else if col.UniqueType == UNIONUNIQUE {
-					if unionUniques, ok := table.Uniques[col.UniqueName]; ok {
-						table.Uniques[col.UniqueName] = append(unionUniques, col.Name)
+					if index, ok := table.Indexes[indexName]; ok {
+						index.AddColumn(col.Name)
+						col.Indexes[index.Name] = true
 					} else {
-						table.Uniques[col.UniqueName] = []string{col.Name}
+						index := NewIndex(indexName, IndexType)
+						index.AddColumn(col.Name)
+						table.AddIndex(index)
+						col.Indexes[index.Name] = true
+					}
+				} else if indexType == UniqueType {
+					if indexName == "" {
+						indexName = col.Name
+					}
+					if index, ok := table.Indexes[indexName]; ok {
+						index.AddColumn(col.Name)
+						col.Indexes[index.Name] = true
+					} else {
+						index := NewIndex(indexName, UniqueType)
+						index.AddColumn(col.Name)
+						table.AddIndex(index)
+						col.Indexes[index.Name] = true
 					}
 				}
 			}
 		} else {
 			sqlType := Type2SQLType(fieldType)
 			col = &Column{engine.Mapper.Obj2Table(t.Field(i).Name), t.Field(i).Name, sqlType,
-				sqlType.DefaultLength, sqlType.DefaultLength2, true, "", NONEUNIQUE, "",
-				NONEINDEX, "", false, false, TWOSIDES, false, false}
+				sqlType.DefaultLength, sqlType.DefaultLength2, true, "", make(map[string]bool), false, false,
+				TWOSIDES, false, false, false}
 		}
 		if col.IsAutoIncrement {
 			col.Nullable = false
 		}
-		if col.IsPrimaryKey {
-			table.PrimaryKey = col.Name
-		}
+
 		table.AddColumn(col)
 
 		if col.FieldName == "Id" || strings.HasSuffix(col.FieldName, ".Id") {
@@ -448,7 +494,7 @@ func (engine *Engine) MapType(t reflect.Type) *Table {
 	return table
 }
 
-// Map should use after all operation because it's not thread safe
+// Map a struct to a table
 func (engine *Engine) Map(beans ...interface{}) (e error) {
 	engine.mutex.Lock()
 	defer engine.mutex.Unlock()
@@ -459,8 +505,8 @@ func (engine *Engine) Map(beans ...interface{}) (e error) {
 	return
 }
 
-// is a table has
-func (engine *Engine) IsEmptyTable(bean interface{}) (bool, error) {
+// Is a table has any reocrd
+func (engine *Engine) IsTableEmpty(bean interface{}) (bool, error) {
 	t := rType(bean)
 	if t.Kind() != reflect.Struct {
 		return false, errors.New("bean should be a struct or struct's point")
@@ -468,10 +514,11 @@ func (engine *Engine) IsEmptyTable(bean interface{}) (bool, error) {
 	engine.AutoMapType(t)
 	session := engine.NewSession()
 	defer session.Close()
-	has, err := session.Get(bean)
-	return !has, err
+	rows, err := session.Count(bean)
+	return rows > 0, err
 }
 
+// Is a table is exist
 func (engine *Engine) IsTableExist(bean interface{}) (bool, error) {
 	t := rType(bean)
 	if t.Kind() != reflect.Struct {
@@ -484,6 +531,21 @@ func (engine *Engine) IsTableExist(bean interface{}) (bool, error) {
 	return has, err
 }
 
+// create indexes
+func (engine *Engine) CreateIndexes(bean interface{}) error {
+	session := engine.NewSession()
+	defer session.Close()
+	return session.CreateIndexes(bean)
+}
+
+// create uniques
+func (engine *Engine) CreateUniques(bean interface{}) error {
+	session := engine.NewSession()
+	defer session.Close()
+	return session.CreateUniques(bean)
+}
+
+// If enabled cache, clear the cache bean
 func (engine *Engine) ClearCacheBean(bean interface{}, id int64) error {
 	t := rType(bean)
 	if t.Kind() != reflect.Struct {
@@ -497,6 +559,7 @@ func (engine *Engine) ClearCacheBean(bean interface{}, id int64) error {
 	return nil
 }
 
+// If enabled cache, clear some tables' cache
 func (engine *Engine) ClearCache(beans ...interface{}) error {
 	for _, bean := range beans {
 		t := rType(bean)
@@ -512,8 +575,9 @@ func (engine *Engine) ClearCache(beans ...interface{}) error {
 	return nil
 }
 
-// sync the new struct to database, this method will auto add column, index, unique
-// but will not delete or change anything.
+// Sync the new struct change to database, this method will automatically add
+// table, column, index, unique. but will not delete or change anything.
+// If you change some field, you should change the database manually.
 func (engine *Engine) Sync(beans ...interface{}) error {
 	for _, bean := range beans {
 		table := engine.AutoMap(bean)
@@ -564,41 +628,40 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 				}
 			}
 
-			for idx, _ := range table.Indexes {
+			for name, index := range table.Indexes {
 				session := engine.NewSession()
 				session.Statement.RefTable = table
 				defer session.Close()
-				isExist, err := session.isIndexExist(table.Name, idx, false)
-				if err != nil {
-					return err
-				}
-				if !isExist {
-					session := engine.NewSession()
-					session.Statement.RefTable = table
-					defer session.Close()
-					err = session.addIndex(table.Name, idx)
+				if index.Type == UniqueType {
+					isExist, err := session.isIndexExist(table.Name, name, true)
 					if err != nil {
 						return err
 					}
-				}
-			}
-
-			for uqe, _ := range table.Uniques {
-				session := engine.NewSession()
-				session.Statement.RefTable = table
-				defer session.Close()
-				isExist, err := session.isIndexExist(table.Name, uqe, true)
-				if err != nil {
-					return err
-				}
-				if !isExist {
-					session := engine.NewSession()
-					session.Statement.RefTable = table
-					defer session.Close()
-					err = session.addUnique(table.Name, uqe)
+					if !isExist {
+						session := engine.NewSession()
+						session.Statement.RefTable = table
+						defer session.Close()
+						err = session.addUnique(table.Name, name)
+						if err != nil {
+							return err
+						}
+					}
+				} else if index.Type == IndexType {
+					isExist, err := session.isIndexExist(table.Name, name, false)
 					if err != nil {
 						return err
 					}
+					if !isExist {
+						session := engine.NewSession()
+						session.Statement.RefTable = table
+						defer session.Close()
+						err = session.addIndex(table.Name, name)
+						if err != nil {
+							return err
+						}
+					}
+				} else {
+					return errors.New("unknow index type")
 				}
 			}
 		}
@@ -618,8 +681,9 @@ func (engine *Engine) UnMap(beans ...interface{}) (e error) {
 	return
 }
 
-func (e *Engine) DropAll() error {
-	session := e.NewSession()
+// Drop all mapped table
+func (engine *Engine) DropAll() error {
+	session := engine.NewSession()
 	defer session.Close()
 
 	err := session.Begin()
@@ -634,8 +698,9 @@ func (e *Engine) DropAll() error {
 	return session.Commit()
 }
 
-func (e *Engine) CreateTables(beans ...interface{}) error {
-	session := e.NewSession()
+// CreateTables create tabls according bean
+func (engine *Engine) CreateTables(beans ...interface{}) error {
+	session := engine.NewSession()
 	err := session.Begin()
 	defer session.Close()
 	if err != nil {
@@ -652,8 +717,8 @@ func (e *Engine) CreateTables(beans ...interface{}) error {
 	return session.Commit()
 }
 
-func (e *Engine) DropTables(beans ...interface{}) error {
-	session := e.NewSession()
+func (engine *Engine) DropTables(beans ...interface{}) error {
+	session := engine.NewSession()
 	err := session.Begin()
 	defer session.Close()
 	if err != nil {
@@ -670,8 +735,8 @@ func (e *Engine) DropTables(beans ...interface{}) error {
 	return session.Commit()
 }
 
-func (e *Engine) CreateAll() error {
-	session := e.NewSession()
+func (engine *Engine) CreateAll() error {
+	session := engine.NewSession()
 	defer session.Close()
 	return session.CreateAll()
 }

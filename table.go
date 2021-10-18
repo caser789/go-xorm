@@ -143,33 +143,57 @@ func Type2SQLType(t reflect.Type) (st SQLType) {
 	return
 }
 
+func SQLType2Type(st SQLType) reflect.Type {
+	switch st.Name {
+	case Bit, TinyInt, SmallInt, MediumInt, Int, Integer, Serial:
+		return reflect.TypeOf(1)
+	case BigInt, BigSerial:
+		return reflect.TypeOf(int64(1))
+	case Float, Real:
+		return reflect.TypeOf(float32(1))
+	case Double:
+		return reflect.TypeOf(float64(1))
+	case Char, Varchar, TinyText, Text, MediumText, LongText:
+		return reflect.TypeOf("")
+	case TinyBlob, Blob, LongBlob, Bytea, Binary, MediumBlob, VarBinary:
+		return reflect.TypeOf([]byte{})
+	case Bool:
+		return reflect.TypeOf(true)
+	case DateTime, Date, Time, TimeStamp:
+		return reflect.TypeOf(tm)
+	case Decimal, Numeric:
+		return reflect.TypeOf("")
+	default:
+		return reflect.TypeOf("")
+	}
+}
+
+const (
+	IndexType = iota + 1
+	UniqueType
+)
+
+type Index struct {
+	Name string
+	Type int
+	Cols []string
+}
+
+func (index *Index) AddColumn(cols ...string) {
+	for _, col := range cols {
+		index.Cols = append(index.Cols, col)
+	}
+}
+
+func NewIndex(name string, indexType int) *Index {
+	return &Index{name, indexType, make([]string, 0)}
+}
+
 const (
 	TWOSIDES = iota + 1
 	ONLYTODB
 	ONLYFROMDB
 )
-
-const (
-	NONEINDEX = iota
-	SINGLEINDEX
-	UNIONINDEX
-)
-
-const (
-	NONEUNIQUE = iota
-	SINGLEUNIQUE
-	UNIONUNIQUE
-)
-
-type Index struct {
-	Name     string
-	IsUnique bool
-	Cols     []*Column
-}
-
-func NewIndex(name string, isUnique bool) *Index {
-	return &Index{name, isUnique, make([]*Column, 0)}
-}
 
 type Column struct {
 	Name            string
@@ -179,28 +203,26 @@ type Column struct {
 	Length2         int
 	Nullable        bool
 	Default         string
-	UniqueType      int
-	UniqueName      string
-	IndexType       int
-	IndexName       string
+	Indexes         map[string]bool
 	IsPrimaryKey    bool
 	IsAutoIncrement bool
 	MapType         int
 	IsCreated       bool
 	IsUpdated       bool
+	IsCascade       bool
 }
 
-func (col *Column) String(engine *Engine) string {
-	sql := engine.Quote(col.Name) + " "
+func (col *Column) String(d dialect) string {
+	sql := d.QuoteStr() + col.Name + d.QuoteStr() + " "
 
-	sql += engine.SqlType(col) + " "
+	sql += d.SqlType(col) + " "
 
 	if col.IsPrimaryKey {
 		sql += "PRIMARY KEY "
 	}
 
 	if col.IsAutoIncrement {
-		sql += engine.AutoIncrStr() + " "
+		sql += d.AutoIncrStr() + " "
 	}
 
 	if col.Nullable {
@@ -212,6 +234,7 @@ func (col *Column) String(engine *Engine) string {
 	if col.Default != "" {
 		sql += "DEFAULT " + col.Default + " "
 	}
+
 	return sql
 }
 
@@ -236,8 +259,7 @@ type Table struct {
 	Type       reflect.Type
 	ColumnsSeq []string
 	Columns    map[string]*Column
-	Indexes    map[string][]string
-	Uniques    map[string][]string
+	Indexes    map[string]*Index
 	PrimaryKey string
 	Created    string
 	Updated    string
@@ -251,9 +273,22 @@ func (table *Table) PKColumn() *Column {
 func (table *Table) AddColumn(col *Column) {
 	table.ColumnsSeq = append(table.ColumnsSeq, col.Name)
 	table.Columns[col.Name] = col
+	if col.IsPrimaryKey {
+		table.PrimaryKey = col.Name
+	}
+	if col.IsCreated {
+		table.Created = col.Name
+	}
+	if col.IsUpdated {
+		table.Updated = col.Name
+	}
 }
 
-func (table *Table) GenCols(session *Session, bean interface{}, useCol bool, includeQuote bool) ([]string, []interface{}, error) {
+func (table *Table) AddIndex(index *Index) {
+	table.Indexes[index.Name] = index
+}
+
+func (table *Table) genCols(session *Session, bean interface{}, useCol bool, includeQuote bool) ([]string, []interface{}, error) {
 	colNames := make([]string, 0)
 	args := make([]interface{}, 0)
 
