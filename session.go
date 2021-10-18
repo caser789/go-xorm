@@ -349,8 +349,9 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 	table := session.Engine.autoMapType(rType(obj))
 
 	for key, data := range objMap {
+		key = strings.ToLower(key)
 		if _, ok := table.Columns[key]; !ok {
-			session.Engine.LogWarn("table %v's has not column %v.", table.Name, key)
+			session.Engine.LogWarn(fmt.Sprintf("table %v's has not column %v. %v", table.Name, key, table.ColumnsSeq))
 			continue
 		}
 		col := table.Columns[key]
@@ -792,11 +793,11 @@ func (session *Session) cacheFind(t reflect.Type, sql string, rowsSlicePtr inter
 			}
 		}
 		/*} else {
-			session.Engine.LogDebug("[xorm:cacheFind] cache delete:", tableName, ides[j])
-			cacher.DelBean(tableName, ids[j])
+		    session.Engine.LogDebug("[xorm:cacheFind] cache delete:", tableName, ides[j])
+		    cacher.DelBean(tableName, ids[j])
 
-			session.Engine.LogDebug("[xorm:cacheFind] cache clear:", tableName)
-			cacher.ClearIds(tableName)
+		    session.Engine.LogDebug("[xorm:cacheFind] cache clear:", tableName)
+		    cacher.ClearIds(tableName)
 		}*/
 	}
 
@@ -1001,8 +1002,8 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 	}
 
 	if len(condiBean) > 0 {
-		colNames, args := buildConditions(session.Engine, table, condiBean[0], true,
-			session.Statement.allUseBool, false, session.Statement.boolColumnMap)
+		colNames, args := buildConditions(session.Engine, table, condiBean[0], true, true,
+			false, session.Statement.allUseBool, session.Statement.boolColumnMap)
 		session.Statement.ConditionStr = strings.Join(colNames, " AND ")
 		session.Statement.BeanArgs = args
 	}
@@ -1014,6 +1015,9 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 		if columnStr == "" {
 			columnStr = session.Statement.genColumnStr()
 		}
+
+		session.Statement.attachInSql()
+
 		sql = session.Statement.genSelectSql(columnStr)
 		args = append(session.Statement.Params, session.Statement.BeanArgs...)
 	} else {
@@ -1284,11 +1288,11 @@ func row2map(rows *sql.Rows, fields []string) (resultsMap map[string][]byte, err
 			str = fmt.Sprintf("%v", vv.Complex())
 			result[key] = []byte(str)
 		/* TODO: unsupported types below
-		case reflect.Map:
-		case reflect.Ptr:
-		case reflect.Uintptr:
-		case reflect.UnsafePointer:
-		case reflect.Chan, reflect.Func, reflect.Interface:
+		   case reflect.Map:
+		   case reflect.Ptr:
+		   case reflect.Uintptr:
+		   case reflect.UnsafePointer:
+		   case reflect.Chan, reflect.Func, reflect.Interface:
 		*/
 		default:
 			return nil, errors.New(fmt.Sprintf("Unsupported struct type %v", vv.Type().Name()))
@@ -2174,7 +2178,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 			}
 		}
 
-		if table.PrimaryKey == "" {
+		if table.PrimaryKey == "" || table.PKColumn().SQLType.IsText() {
 			return res.RowsAffected()
 		}
 
@@ -2361,8 +2365,8 @@ func (session *Session) cacheUpdate(sql string, args ...interface{}) error {
 			}
 		}
 	} /*else {
-		session.Engine.LogDebug("[xorm:cacheUpdate] del cached sql:", tableName, newsql, args)
-		cacher.DelIds(tableName, genSqlKey(newsql, args))
+	    session.Engine.LogDebug("[xorm:cacheUpdate] del cached sql:", tableName, newsql, args)
+	    cacher.DelIds(tableName, genSqlKey(newsql, args))
 	}*/
 
 	for _, id := range ids {
@@ -2418,9 +2422,9 @@ func (session *Session) cacheUpdate(sql string, args ...interface{}) error {
 // Update records, bean's non-empty fields are updated contents,
 // condiBean' non-empty filds are conditions
 // CAUTION:
-//	    1.bool will defaultly be updated content nor conditions
-// 		You should call UseBool if you have bool to use.
-//		2.float32 & float64 may be not inexact as conditions
+//        1.bool will defaultly be updated content nor conditions
+//         You should call UseBool if you have bool to use.
+//        2.float32 & float64 may be not inexact as conditions
 func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int64, error) {
 	err := session.newDb()
 	if err != nil {
@@ -2452,8 +2456,8 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		session.Statement.RefTable = table
 
 		if session.Statement.ColumnStr == "" {
-			colNames, args = buildConditions(session.Engine, table, bean, false,
-				session.Statement.allUseBool, true, session.Statement.boolColumnMap)
+			colNames, args = buildConditions(session.Engine, table, bean, false, false,
+				false, session.Statement.allUseBool, session.Statement.boolColumnMap)
 		} else {
 			colNames, args, err = table.genCols(session, bean, true, true)
 			if err != nil {
@@ -2486,8 +2490,8 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 	var condiArgs []interface{}
 
 	if len(condiBean) > 0 {
-		condiColNames, condiArgs = buildConditions(session.Engine, session.Statement.RefTable, condiBean[0], true,
-			session.Statement.allUseBool, false, session.Statement.boolColumnMap)
+		condiColNames, condiArgs = buildConditions(session.Engine, session.Statement.RefTable, condiBean[0], true, true,
+			false, session.Statement.allUseBool, session.Statement.boolColumnMap)
 	}
 
 	var condition = ""
@@ -2507,7 +2511,8 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		}
 	}
 
-	var sql string
+	var sql, inSql string
+	var inArgs []interface{}
 	if table.Version != "" && session.Statement.checkVersion {
 		if condition != "" {
 			condition = fmt.Sprintf("WHERE (%v) AND %v = ?", condition,
@@ -2515,6 +2520,15 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		} else {
 			condition = fmt.Sprintf("WHERE %v = ?", session.Engine.Quote(table.Version))
 		}
+		inSql, inArgs = session.Statement.genInSql()
+		if len(inSql) > 0 {
+			if condition != "" {
+				condition += " AND " + inSql
+			} else {
+				condition = "WHERE " + inSql
+			}
+		}
+
 		sql = fmt.Sprintf("UPDATE %v SET %v, %v %v",
 			session.Engine.Quote(session.Statement.TableName()),
 			strings.Join(colNames, ", "),
@@ -2526,13 +2540,24 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		if condition != "" {
 			condition = "WHERE " + condition
 		}
+		inSql, inArgs = session.Statement.genInSql()
+		if len(inSql) > 0 {
+			if condition != "" {
+				condition += " AND " + inSql
+			} else {
+				condition = "WHERE " + inSql
+			}
+		}
+
 		sql = fmt.Sprintf("UPDATE %v SET %v %v",
 			session.Engine.Quote(session.Statement.TableName()),
 			strings.Join(colNames, ", "),
 			condition)
 	}
 
-	args = append(append(args, st.Params...), condiArgs...)
+	args = append(args, st.Params...)
+	args = append(args, inArgs...)
+	args = append(args, condiArgs...)
 
 	res, err := session.exec(sql, args...)
 	if err != nil {
@@ -2615,8 +2640,8 @@ func (session *Session) cacheDelete(sql string, args ...interface{}) error {
 			}
 		}
 	} /*else {
-		session.Engine.LogDebug("delete cache sql %v", newsql)
-		cacher.DelIds(tableName, genSqlKey(newsql, args))
+	    session.Engine.LogDebug("delete cache sql %v", newsql)
+	    cacher.DelIds(tableName, genSqlKey(newsql, args))
 	}*/
 
 	for _, id := range ids {
@@ -2652,17 +2677,25 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 
 	table := session.Engine.autoMap(bean)
 	session.Statement.RefTable = table
-	colNames, args := buildConditions(session.Engine, table, bean, true,
-		session.Statement.allUseBool, false, session.Statement.boolColumnMap)
+	colNames, args := buildConditions(session.Engine, table, bean, true, true,
+		false, session.Statement.allUseBool, session.Statement.boolColumnMap)
 
 	var condition = ""
 	if session.Statement.WhereStr != "" {
 		condition = session.Statement.WhereStr
 		if len(colNames) > 0 {
-			condition += " and " + strings.Join(colNames, " and ")
+			condition += " AND " + strings.Join(colNames, " AND ")
 		}
 	} else {
-		condition = strings.Join(colNames, " and ")
+		condition = strings.Join(colNames, " AND ")
+	}
+	inSql, inArgs := session.Statement.genInSql()
+	if len(inSql) > 0 {
+		if len(condition) > 0 {
+			condition += " AND "
+		}
+		condition += inSql
+		args = append(args, inArgs...)
 	}
 	if len(condition) == 0 {
 		return 0, ErrNeedDeletedCond
