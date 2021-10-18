@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	version string = "0.2.0"
+	version string = "0.2.2"
 )
 
 func close(engine *Engine) {
@@ -20,8 +20,9 @@ func close(engine *Engine) {
 // new a db manager according to the parameter. Currently support four
 // drivers
 func NewEngine(driverName string, dataSourceName string) (*Engine, error) {
-	engine := &Engine{DriverName: driverName, Mapper: SnakeMapper{},
+	engine := &Engine{DriverName: driverName,
 		DataSourceName: dataSourceName, Filters: make([]Filter, 0)}
+	engine.SetMapper(SnakeMapper{})
 
 	if driverName == SQLITE {
 		engine.dialect = &sqlite3{}
