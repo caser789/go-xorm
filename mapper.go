@@ -1,8 +1,7 @@
 package xorm
 
 import (
-//"reflect"
-//"strings"
+	"strings"
 )
 
 // name translation between struct, fields names and table, column names
@@ -45,22 +44,22 @@ func snakeCasedName(name string) string {
 }
 
 /*func pascal2Sql(s string) (d string) {
-	d = ""
-	lastIdx := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 'A' && s[i] <= 'Z' {
-			if lastIdx < i {
-				d += s[lastIdx+1 : i]
-			}
-			if i != 0 {
-				d += "_"
-			}
-			d += string(s[i] + 32)
-			lastIdx = i
-		}
-	}
-	d += s[lastIdx+1:]
-	return
+    d = ""
+    lastIdx := 0
+    for i := 0; i < len(s); i++ {
+        if s[i] >= 'A' && s[i] <= 'Z' {
+            if lastIdx < i {
+                d += s[lastIdx+1 : i]
+            }
+            if i != 0 {
+                d += "_"
+            }
+            d += string(s[i] + 32)
+            lastIdx = i
+        }
+    }
+    d += s[lastIdx+1:]
+    return
 }*/
 
 func (mapper SnakeMapper) Obj2Table(name string) string {
@@ -70,6 +69,8 @@ func (mapper SnakeMapper) Obj2Table(name string) string {
 func titleCasedName(name string) string {
 	newstr := make([]rune, 0)
 	upNextChar := true
+
+	name = strings.ToLower(name)
 
 	for _, chr := range name {
 		switch {

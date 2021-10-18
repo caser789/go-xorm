@@ -40,6 +40,8 @@ type dialect interface {
 	GetIndexes(tableName string) (map[string]*Index, error)
 }
 
+type PK []interface{}
+
 // Engine is the major struct of xorm, it means a database manager.
 // Commonly, an application only need one engine
 type Engine struct {
@@ -201,9 +203,9 @@ func (engine *Engine) LogWarn(contents ...interface{}) {
 // Sql method let's you manualy write raw sql and operate
 // For example:
 //
-// 		engine.Sql("select * from user").Find(&users)
+//         engine.Sql("select * from user").Find(&users)
 //
-// This	code will execute "select * from user" and set the records to users
+// This    code will execute "select * from user" and set the records to users
 //
 func (engine *Engine) Sql(querystring string, args ...interface{}) *Session {
 	session := engine.NewSession()
@@ -269,7 +271,7 @@ func (engine *Engine) Where(querystring string, args ...interface{}) *Session {
 }
 
 // Id mehtod provoide a condition as (id) = ?
-func (engine *Engine) Id(id int64) *Session {
+func (engine *Engine) Id(id interface{}) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Id(id)
@@ -369,8 +371,8 @@ func (engine *Engine) Desc(colNames ...string) *Session {
 // Method Asc will generate "ORDER BY column1 DESC, column2 Asc"
 // This method can chainable use.
 //
-//		engine.Desc("name").Asc("age").Find(&users)
-//		// SELECT * FROM user ORDER BY name DESC, age ASC
+//        engine.Desc("name").Asc("age").Find(&users)
+//        // SELECT * FROM user ORDER BY name DESC, age ASC
 //
 func (engine *Engine) Asc(colNames ...string) *Session {
 	session := engine.NewSession()
@@ -701,9 +703,9 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 			}
 		}
 		/*isEmpty, err := engine.IsEmptyTable(bean)
-		if err != nil {
-			return err
-		}*/
+		  if err != nil {
+		      return err
+		  }*/
 		var isEmpty bool = false
 		if isEmpty {
 			err = engine.DropTables(bean)
@@ -879,9 +881,9 @@ func (engine *Engine) InsertOne(bean interface{}) (int64, error) {
 // Update records, bean's non-empty fields are updated contents,
 // condiBean' non-empty filds are conditions
 // CAUTION:
-//	    1.bool will defaultly be updated content nor conditions
-// 		You should call UseBool if you have bool to use.
-//		2.float32 & float64 may be not inexact as conditions
+//        1.bool will defaultly be updated content nor conditions
+//         You should call UseBool if you have bool to use.
+//        2.float32 & float64 may be not inexact as conditions
 func (engine *Engine) Update(bean interface{}, condiBeans ...interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
