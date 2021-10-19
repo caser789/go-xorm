@@ -95,7 +95,7 @@ func (engine *Engine) AutoIncrStr() string {
 	return engine.Pool.Init(engine)
 }*/
 
-// SetMaxConns is only available for go 1.2+
+// @Deprecated
 func (engine *Engine) SetMaxConns(conns int) {
 	engine.db.SetMaxOpenConns(conns)
 }
