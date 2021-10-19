@@ -35,8 +35,7 @@ type Engine struct {
 	ShowWarn  bool
 	//Pool      IConnectPool
 	//Filters []core.Filter
-	Logger     ILogger // io.Writer
-	TZLocation *time.Location
+	Logger ILogger // io.Writer
 }
 
 func (engine *Engine) DriverName() string {
@@ -76,6 +75,12 @@ func (engine *Engine) QuoteStr() string {
 
 // Use QuoteStr quote the string sql
 func (engine *Engine) Quote(sql string) string {
+	if len(sql) == 0 {
+		return sql
+	}
+	if string(sql[0]) == engine.dialect.QuoteStr() || sql[0] == '`' {
+		return sql
+	}
 	return engine.dialect.QuoteStr() + sql + engine.dialect.QuoteStr()
 }
 
@@ -89,15 +94,14 @@ func (engine *Engine) AutoIncrStr() string {
 	return engine.dialect.AutoIncrStr()
 }
 
-// Set engine's pool, the pool default is Go's standard library's connection pool.
-/*func (engine *Engine) SetPool(pool IConnectPool) error {
-	engine.Pool = pool
-	return engine.Pool.Init(engine)
-}*/
+// SetMaxOpenConns is only available for go 1.2+
+func (engine *Engine) SetMaxOpenConns(conns int) {
+	engine.db.SetMaxOpenConns(conns)
+}
 
 // @Deprecated
 func (engine *Engine) SetMaxConns(conns int) {
-	engine.db.SetMaxOpenConns(conns)
+	engine.SetMaxOpenConns(conns)
 }
 
 // SetMaxIdleConns
@@ -138,6 +142,10 @@ func (engine *Engine) NewDB() (*core.DB, error) {
 
 func (engine *Engine) DB() *core.DB {
 	return engine.db
+}
+
+func (engine *Engine) Dialect() core.Dialect {
+	return engine.dialect
 }
 
 // New a session
@@ -1091,34 +1099,4 @@ func (engine *Engine) Import(ddlPath string) ([]sql.Result, error) {
 		}
 	}
 	return results, lastError
-}
-
-func (engine *Engine) TZTime(t time.Time) time.Time {
-	return t.In(engine.TZLocation)
-}
-
-func (engine *Engine) NowTime(sqlTypeName string) interface{} {
-	t := time.Now()
-	return engine.FormatTime(sqlTypeName, t)
-}
-
-func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}) {
-	switch sqlTypeName {
-	case core.Time:
-		s := engine.TZTime(t).Format("2006-01-02 15:04:05") //time.RFC3339
-		v = s[11:19]
-	case core.Date:
-		v = engine.TZTime(t).Format("2006-01-02")
-	case core.DateTime, core.TimeStamp:
-		v = engine.TZTime(t).Format("2006-01-02 15:04:05")
-	case core.TimeStampz:
-		if engine.dialect.DBType() == core.MSSQL {
-			v = engine.TZTime(t).Format("2006-01-02T15:04:05.9999999Z07:00")
-		} else {
-			v = engine.TZTime(t).Format(time.RFC3339Nano)
-		}
-	default:
-		v = engine.TZTime(t)
-	}
-	return
 }
