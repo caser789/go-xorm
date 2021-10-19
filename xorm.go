@@ -93,6 +93,7 @@ func NewEngine(driverName string, dataSourceName string) (*Engine, error) {
 		mutex:         &sync.RWMutex{},
 		TagIdentifier: "xorm",
 		Logger:        NewSimpleLogger(os.Stdout),
+		TZLocation:    time.Local,
 	}
 
 	engine.SetMapper(core.NewCacheMapper(new(core.SnakeMapper)))
@@ -108,8 +109,4 @@ func NewEngine(driverName string, dataSourceName string) (*Engine, error) {
 // clone an engine
 func (engine *Engine) Clone() (*Engine, error) {
 	return NewEngine(engine.dialect.DriverName(), engine.dialect.DataSourceName())
-}
-
-func NewLRUCacher2(store core.CacheStore, expired time.Duration, max int) *LRUCacher {
-	return NewLRUCacher(store, expired, 0, max)
 }

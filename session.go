@@ -1351,10 +1351,10 @@ func (session *Session) addIndex(tableName, idxName string) error {
 	if session.IsAutoClose {
 		defer session.Close()
 	}
-	index := session.Statement.RefTable.Indexes[idxName]
-	sqlStr := session.Engine.dialect.CreateIndexSql(tableName, index)
-	//genAddIndexStr(indexName(tableName, idxName), cols)
-	_, err = session.exec(sqlStr)
+	//fmt.Println(idxName)
+	cols := session.Statement.RefTable.Indexes[idxName].Cols
+	sqlStr, args := session.Statement.genAddIndexStr(indexName(tableName, idxName), cols)
+	_, err = session.exec(sqlStr, args...)
 	return err
 }
 
@@ -1368,9 +1368,9 @@ func (session *Session) addUnique(tableName, uqeName string) error {
 		defer session.Close()
 	}
 	//fmt.Println(uqeName, session.Statement.RefTable.Uniques)
-	index := session.Statement.RefTable.Indexes[uqeName]
-	sqlStr := session.Engine.dialect.CreateIndexSql(tableName, index)
-	_, err = session.exec(sqlStr)
+	cols := session.Statement.RefTable.Indexes[uqeName].Cols
+	sqlStr, args := session.Statement.genAddUniqueStr(uniqueName(tableName, uqeName), cols)
+	_, err = session.exec(sqlStr, args...)
 	return err
 }
 
@@ -1864,7 +1864,7 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 					}
 				}
 				if (col.IsCreated || col.IsUpdated) && session.Statement.UseAutoTime {
-					args = append(args, time.Now())
+					args = append(args, session.Engine.NowTime(col.SQLType.Name))
 				} else {
 					arg, err := session.value2Interface(col, fieldValue)
 					if err != nil {
@@ -1892,7 +1892,7 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 					}
 				}
 				if (col.IsCreated || col.IsUpdated) && session.Statement.UseAutoTime {
-					args = append(args, time.Now())
+					args = append(args, session.Engine.NowTime(col.SQLType.Name))
 				} else {
 					arg, err := session.value2Interface(col, fieldValue)
 					if err != nil {
@@ -1987,17 +1987,17 @@ func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.T
 			x = time.Unix(0, sd)
 		}
 	} else if len(sdata) > 19 {
-		x, err = time.Parse(time.RFC3339Nano, sdata)
+		x, err = time.ParseInLocation(time.RFC3339Nano, sdata, session.Engine.TZLocation)
 		if err != nil {
-			x, err = time.Parse("2006-01-02 15:04:05.999999999", sdata)
+			x, err = time.ParseInLocation("2006-01-02 15:04:05.999999999", sdata, session.Engine.TZLocation)
 		}
 		if err != nil {
-			x, err = time.Parse("2006-01-02 15:04:05.9999999 Z07:00", sdata)
+			x, err = time.ParseInLocation("2006-01-02 15:04:05.9999999 Z07:00", sdata, session.Engine.TZLocation)
 		}
 	} else if len(sdata) == 19 {
-		x, err = time.Parse("2006-01-02 15:04:05", sdata)
+		x, err = time.ParseInLocation("2006-01-02 15:04:05", sdata, session.Engine.TZLocation)
 	} else if len(sdata) == 10 && sdata[4] == '-' && sdata[7] == '-' {
-		x, err = time.Parse("2006-01-02", sdata)
+		x, err = time.ParseInLocation("2006-01-02", sdata, session.Engine.TZLocation)
 	} else if col.SQLType.Name == core.Time {
 		if strings.Contains(sdata, " ") {
 			ssd := strings.Split(sdata, " ")
@@ -2012,7 +2012,7 @@ func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.T
 		//fmt.Println(sdata)
 
 		st := fmt.Sprintf("2006-01-02 %v", sdata)
-		x, err = time.Parse("2006-01-02 15:04:05", st)
+		x, err = time.ParseInLocation("2006-01-02 15:04:05", st, session.Engine.TZLocation)
 	} else {
 		outErr = errors.New(fmt.Sprintf("unsupported time format %v", sdata))
 		return
@@ -2458,20 +2458,13 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 					return nil, nil
 				}
 			}
-			if col.SQLType.Name == core.Time {
-				//s := fieldValue.Interface().(time.Time).Format("2006-01-02 15:04:05 -0700")
-				s := fieldValue.Interface().(time.Time).Format(time.RFC3339)
-				return s[11:19], nil
-			} else if col.SQLType.Name == core.Date {
-				return fieldValue.Interface().(time.Time).Format("2006-01-02"), nil
-			} else if col.SQLType.Name == core.TimeStampz {
-				if session.Engine.dialect.DBType() == core.MSSQL {
-					tf := t.Format("2006-01-02T15:04:05.9999999Z07:00")
-					return tf, nil
-				}
-				return fieldValue.Interface().(time.Time).Format(time.RFC3339Nano), nil
+			switch fieldValue.Interface().(type) {
+			case time.Time:
+				tf := session.Engine.FormatTime(col.SQLType.Name, fieldValue.Interface().(time.Time))
+				return tf, nil
+			default:
+				return fieldValue.Interface(), nil
 			}
-			return fieldValue.Interface(), nil
 		}
 		if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
 			if len(fieldTable.PrimaryKeys) == 1 {
@@ -2955,7 +2948,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 	if session.Statement.UseAutoTime && table.Updated != "" {
 		colNames = append(colNames, session.Engine.Quote(table.Updated)+" = ?")
-		args = append(args, time.Now())
+		args = append(args, session.Engine.NowTime(table.Columns()[table.Updated].SQLType.Name))
 	}
 
 	//for update action to like "column = column + ?"
