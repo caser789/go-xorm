@@ -1,4 +1,4 @@
-package drivers
+package xorm
 
 import (
 	"regexp"
@@ -7,9 +7,9 @@ import (
 	"github.com/caser789/go-xorm/core"
 )
 
-func init() {
-	core.RegisterDriver("mysql", &mysqlDriver{})
-}
+// func init() {
+// 	core.RegisterDriver("mysql", &mysqlDriver{})
+// }
 
 type mysqlDriver struct {
 }

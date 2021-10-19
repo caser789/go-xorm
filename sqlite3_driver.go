@@ -1,12 +1,12 @@
-package drivers
+package xorm
 
 import (
 	"github.com/caser789/go-xorm/core"
 )
 
-func init() {
-	core.RegisterDriver("sqlite3", &sqlite3Driver{})
-}
+// func init() {
+// 	core.RegisterDriver("sqlite3", &sqlite3Driver{})
+// }
 
 type sqlite3Driver struct {
 }

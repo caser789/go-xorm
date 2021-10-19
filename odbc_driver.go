@@ -1,4 +1,4 @@
-package drivers
+package xorm
 
 import (
 	"errors"
@@ -7,9 +7,9 @@ import (
 	"github.com/caser789/go-xorm/core"
 )
 
-func init() {
-	core.RegisterDriver("odbc", &odbcDriver{})
-}
+// func init() {
+// 	core.RegisterDriver("odbc", &odbcDriver{})
+// }
 
 type odbcDriver struct {
 }
