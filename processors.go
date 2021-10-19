@@ -15,10 +15,14 @@ type BeforeDeleteProcessor interface {
 	BeforeDelete()
 }
 
+type BeforeSetProcessor interface {
+	BeforeSet(string, Cell)
+}
+
 // !nashtsai! TODO enable BeforeValidateProcessor when xorm start to support validations
 //// Executed before an object is validated
 //type BeforeValidateProcessor interface {
-//	BeforeValidate()
+//    BeforeValidate()
 //}
 // --
 
