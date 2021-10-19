@@ -16,24 +16,11 @@ import (
 	"github.com/caser789/go-xorm/core"
 )
 
-/*const (
-	POSTGRES = "postgres"
-	SQLITE   = "sqlite3"
-	MYSQL    = "mysql"
-	MYMYSQL  = "mymysql"
-
-	MSSQL = "mssql"
-
-	ORACLE_OCI = "oci8"
-)*/
-
-type PK []interface{}
-
 // Engine is the major struct of xorm, it means a database manager.
 // Commonly, an application only need one engine
 type Engine struct {
-	columnMapper   IMapper
-	tableMapper    IMapper
+	ColumnMapper   core.IMapper
+	TableMapper    core.IMapper
 	TagIdentifier  string
 	DriverName     string
 	DataSourceName string
@@ -48,21 +35,21 @@ type Engine struct {
 	Pool         IConnectPool
 	Filters      []core.Filter
 	Logger       io.Writer
-	Cacher       Cacher
-	tableCachers map[reflect.Type]Cacher
+	Cacher       core.Cacher
+	tableCachers map[reflect.Type]core.Cacher
 }
 
-func (engine *Engine) SetMapper(mapper IMapper) {
+func (engine *Engine) SetMapper(mapper core.IMapper) {
 	engine.SetTableMapper(mapper)
 	engine.SetColumnMapper(mapper)
 }
 
-func (engine *Engine) SetTableMapper(mapper IMapper) {
-	engine.tableMapper = mapper
+func (engine *Engine) SetTableMapper(mapper core.IMapper) {
+	engine.TableMapper = mapper
 }
 
-func (engine *Engine) SetColumnMapper(mapper IMapper) {
-	engine.columnMapper = mapper
+func (engine *Engine) SetColumnMapper(mapper core.IMapper) {
+	engine.ColumnMapper = mapper
 }
 
 // If engine's database support batch insert records like
@@ -111,7 +98,7 @@ func (engine *Engine) SetMaxIdleConns(conns int) {
 }
 
 // SetDefaltCacher set the default cacher. Xorm's default not enable cacher.
-func (engine *Engine) SetDefaultCacher(cacher Cacher) {
+func (engine *Engine) SetDefaultCacher(cacher core.Cacher) {
 	engine.Cacher = cacher
 }
 
@@ -130,7 +117,7 @@ func (engine *Engine) NoCascade() *Session {
 }
 
 // Set a table use a special cacher
-func (engine *Engine) MapCacher(bean interface{}, cacher Cacher) {
+func (engine *Engine) MapCacher(bean interface{}, cacher core.Cacher) {
 	t := rType(bean)
 	engine.autoMapType(t)
 	engine.tableCachers[t] = cacher
@@ -417,10 +404,10 @@ func (engine *Engine) autoMap(bean interface{}) *core.Table {
 }
 
 func (engine *Engine) mapType(t reflect.Type) *core.Table {
-	return mappingTable(t, engine.tableMapper, engine.columnMapper, engine.dialect, engine.TagIdentifier)
+	return mappingTable(t, engine.TableMapper, engine.ColumnMapper, engine.dialect, engine.TagIdentifier)
 }
 
-func mappingTable(t reflect.Type, tableMapper IMapper, colMapper IMapper, dialect core.Dialect, tagId string) *core.Table {
+func mappingTable(t reflect.Type, tableMapper core.IMapper, colMapper core.IMapper, dialect core.Dialect, tagId string) *core.Table {
 	table := core.NewEmptyTable()
 	table.Name = tableMapper.Obj2Table(t.Name())
 	table.Type = t
@@ -435,7 +422,7 @@ func mappingTable(t reflect.Type, tableMapper IMapper, colMapper IMapper, dialec
 
 		if ormTagStr != "" {
 			col = &core.Column{FieldName: t.Field(i).Name, Nullable: true, IsPrimaryKey: false,
-				IsAutoIncrement: false, MapType: TWOSIDES, Indexes: make(map[string]bool)}
+				IsAutoIncrement: false, MapType: core.TWOSIDES, Indexes: make(map[string]bool)}
 			tags := strings.Split(ormTagStr, " ")
 
 			if len(tags) > 0 {
@@ -450,7 +437,6 @@ func mappingTable(t reflect.Type, tableMapper IMapper, colMapper IMapper, dialec
 						table.AddColumn(col)
 					}
 
-					//table.PrimaryKeys = parentTable.PrimaryKeys
 					continue
 				}
 
@@ -460,9 +446,9 @@ func mappingTable(t reflect.Type, tableMapper IMapper, colMapper IMapper, dialec
 					k := strings.ToUpper(key)
 					switch {
 					case k == "<-":
-						col.MapType = ONLYFROMDB
+						col.MapType = core.ONLYFROMDB
 					case k == "->":
-						col.MapType = ONLYTODB
+						col.MapType = core.ONLYTODB
 					case k == "PK":
 						col.IsPrimaryKey = true
 						col.Nullable = false
@@ -529,6 +515,7 @@ func mappingTable(t reflect.Type, tableMapper IMapper, colMapper IMapper, dialec
 				if col.Length2 == 0 {
 					col.Length2 = col.SQLType.DefaultLength2
 				}
+				fmt.Println("======", col)
 				if col.Name == "" {
 					col.Name = colMapper.Obj2Table(t.Field(i).Name)
 				}
@@ -562,9 +549,8 @@ func mappingTable(t reflect.Type, tableMapper IMapper, colMapper IMapper, dialec
 			}
 		} else {
 			sqlType := core.Type2SQLType(fieldType)
-			col = &core.Column{colMapper.Obj2Table(t.Field(i).Name), t.Field(i).Name, sqlType,
-				sqlType.DefaultLength, sqlType.DefaultLength2, true, "", make(map[string]bool), false, false,
-				TWOSIDES, false, false, false, false}
+			col = core.NewColumn(colMapper.Obj2Table(t.Field(i).Name), t.Field(i).Name, sqlType,
+				sqlType.DefaultLength, sqlType.DefaultLength2, true)
 		}
 		if col.IsAutoIncrement {
 			col.Nullable = false
@@ -626,6 +612,24 @@ func (engine *Engine) IsTableExist(bean interface{}) (bool, error) {
 	return has, err
 }
 
+func (engine *Engine) IdOf(bean interface{}) core.PK {
+	table := engine.autoMap(bean)
+	v := reflect.Indirect(reflect.ValueOf(bean))
+	pk := make([]interface{}, len(table.PrimaryKeys))
+	for i, col := range table.PKColumns() {
+		pkField := v.FieldByName(col.FieldName)
+		switch pkField.Kind() {
+		case reflect.String:
+			pk[i] = pkField.String()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			pk[i] = pkField.Int()
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			pk[i] = pkField.Uint()
+		}
+	}
+	return core.PK(pk)
+}
+
 // create indexes
 func (engine *Engine) CreateIndexes(bean interface{}) error {
 	session := engine.NewSession()
@@ -640,7 +644,7 @@ func (engine *Engine) CreateUniques(bean interface{}) error {
 	return session.CreateUniques(bean)
 }
 
-func (engine *Engine) getCacher(t reflect.Type) Cacher {
+func (engine *Engine) getCacher(t reflect.Type) core.Cacher {
 	if cacher, ok := engine.tableCachers[t]; ok {
 		return cacher
 	}
@@ -648,7 +652,7 @@ func (engine *Engine) getCacher(t reflect.Type) Cacher {
 }
 
 // If enabled cache, clear the cache bean
-func (engine *Engine) ClearCacheBean(bean interface{}, id int64) error {
+func (engine *Engine) ClearCacheBean(bean interface{}, id string) error {
 	t := rType(bean)
 	if t.Kind() != reflect.Struct {
 		return errors.New("error params")
