@@ -28,6 +28,7 @@ const (
 // a dialect is a driver's wrapper
 type dialect interface {
 	Init(DriverName, DataSourceName string) error
+	URI() *uri
 	DBType() string
 	SqlType(t *Column) string
 	SupportInsertMany() bool
@@ -472,11 +473,11 @@ func (engine *Engine) mapType(t reflect.Type) *Table {
 					parentTable := engine.mapType(fieldType)
 					for name, col := range parentTable.Columns {
 						col.FieldName = fmt.Sprintf("%v.%v", fieldType.Name(), col.FieldName)
-						table.Columns[name] = col
+						table.Columns[strings.ToLower(name)] = col
 						table.ColumnsSeq = append(table.ColumnsSeq, name)
 					}
 
-					table.PrimaryKey = parentTable.PrimaryKey
+					table.PrimaryKeys = parentTable.PrimaryKeys
 					continue
 				}
 				var indexType int
@@ -602,12 +603,13 @@ func (engine *Engine) mapType(t reflect.Type) *Table {
 		}
 	}
 
-	if idFieldColName != "" && table.PrimaryKey == "" {
-		col := table.Columns[idFieldColName]
+	if idFieldColName != "" && len(table.PrimaryKeys) == 0 {
+		col := table.Columns[strings.ToLower(idFieldColName)]
 		col.IsPrimaryKey = true
 		col.IsAutoIncrement = true
 		col.Nullable = false
-		table.PrimaryKey = col.Name
+		table.PrimaryKeys = append(table.PrimaryKeys, col.Name)
+		table.AutoIncrement = col.Name
 	}
 
 	return table
@@ -931,6 +933,13 @@ func (engine *Engine) Iterate(bean interface{}, fun IterFunc) error {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Iterate(bean, fun)
+}
+
+// Return sql.Rows compatible Rows obj, as a forward Iterator object for iterating record by record, bean's non-empty fields
+// are conditions.
+func (engine *Engine) Rows(bean interface{}) (*Rows, error) {
+	session := engine.NewSession()
+	return session.Rows(bean)
 }
 
 // Count counts the records. bean's non-empty fields
