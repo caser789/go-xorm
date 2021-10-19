@@ -1083,7 +1083,7 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 	if len(condiBean) > 0 {
 		colNames, args := buildConditions(session.Engine, table, condiBean[0], true, true,
 			false, true, session.Statement.allUseBool, session.Statement.useAllCols,
-			session.Statement.mustColumnMap, false)
+			session.Statement.mustColumnMap)
 		session.Statement.ConditionStr = strings.Join(colNames, " AND ")
 		session.Statement.BeanArgs = args
 	}
@@ -1253,7 +1253,7 @@ func (session *Session) Ping() error {
 	return session.Db.Ping()
 }
 
-func (session *Session) isColumnExist(tableName string, col *core.Column) (bool, error) {
+func (session *Session) isColumnExist(tableName, colName string) (bool, error) {
 	err := session.newDb()
 	if err != nil {
 		return false, err
@@ -1262,10 +1262,9 @@ func (session *Session) isColumnExist(tableName string, col *core.Column) (bool,
 	if session.IsAutoClose {
 		defer session.Close()
 	}
-	return session.Engine.dialect.IsColumnExist(tableName, col)
-	//sqlStr, args := session.Engine.dialect.ColumnCheckSql(tableName, colName)
-	//results, err := session.query(sqlStr, args...)
-	//return len(results) > 0, err
+	sqlStr, args := session.Engine.dialect.ColumnCheckSql(tableName, colName)
+	results, err := session.query(sqlStr, args...)
+	return len(results) > 0, err
 }
 
 func (session *Session) isTableExist(tableName string) (bool, error) {
@@ -2948,9 +2947,9 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		session.Statement.RefTable = table
 
 		if session.Statement.ColumnStr == "" {
-			colNames, args = buildConditions(session.Engine, table, bean, false, false,
+			colNames, args = buildUpdates(session.Engine, table, bean, false, false,
 				false, false, session.Statement.allUseBool, session.Statement.useAllCols,
-				session.Statement.mustColumnMap, true)
+				session.Statement.mustColumnMap)
 		} else {
 			colNames, args, err = genCols(table, session, bean, true, true)
 			if err != nil {
@@ -2991,7 +2990,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 	if len(condiBean) > 0 {
 		condiColNames, condiArgs = buildConditions(session.Engine, session.Statement.RefTable, condiBean[0], true, true,
 			false, true, session.Statement.allUseBool, session.Statement.useAllCols,
-			session.Statement.mustColumnMap, false)
+			session.Statement.mustColumnMap)
 	}
 
 	var condition = ""
@@ -3004,12 +3003,11 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 	if condition == "" {
 		if len(condiColNames) > 0 {
-			condition = fmt.Sprintf("%v", strings.Join(condiColNames, " "+session.Engine.Dialect().AndStr()+" "))
+			condition = fmt.Sprintf("%v", strings.Join(condiColNames, " AND "))
 		}
 	} else {
 		if len(condiColNames) > 0 {
-			condition = fmt.Sprintf("(%v) %v (%v)", condition,
-				session.Engine.Dialect().AndStr(), strings.Join(condiColNames, " "+session.Engine.Dialect().AndStr()+" "))
+			condition = fmt.Sprintf("(%v) AND (%v)", condition, strings.Join(condiColNames, " AND "))
 		}
 	}
 
@@ -3019,7 +3017,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 	var verValue *reflect.Value
 	if table.Version != "" && session.Statement.checkVersion {
 		if condition != "" {
-			condition = fmt.Sprintf("WHERE (%v) %v %v = ?", condition, session.Engine.Dialect().AndStr(),
+			condition = fmt.Sprintf("WHERE (%v) AND %v = ?", condition,
 				session.Engine.Quote(table.Version))
 		} else {
 			condition = fmt.Sprintf("WHERE %v = ?", session.Engine.Quote(table.Version))
@@ -3027,7 +3025,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		inSql, inArgs = session.Statement.genInSql()
 		if len(inSql) > 0 {
 			if condition != "" {
-				condition += " " + session.Engine.Dialect().AndStr() + " " + inSql
+				condition += " AND " + inSql
 			} else {
 				condition = "WHERE " + inSql
 			}
@@ -3053,7 +3051,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		inSql, inArgs = session.Statement.genInSql()
 		if len(inSql) > 0 {
 			if condition != "" {
-				condition += " " + session.Engine.Dialect().AndStr() + " " + inSql
+				condition += " AND " + inSql
 			} else {
 				condition = "WHERE " + inSql
 			}
@@ -3195,24 +3193,23 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	session.Statement.RefTable = table
 	colNames, args := buildConditions(session.Engine, table, bean, true, true,
 		false, true, session.Statement.allUseBool, session.Statement.useAllCols,
-		session.Statement.mustColumnMap, false)
+		session.Statement.mustColumnMap)
 
 	var condition = ""
-	var andStr = session.Engine.dialect.AndStr()
 
 	session.Statement.processIdParam()
 	if session.Statement.WhereStr != "" {
 		condition = session.Statement.WhereStr
 		if len(colNames) > 0 {
-			condition += " " + andStr + " " + strings.Join(colNames, " "+andStr+" ")
+			condition += " AND " + strings.Join(colNames, " AND ")
 		}
 	} else {
-		condition = strings.Join(colNames, " "+andStr+" ")
+		condition = strings.Join(colNames, " AND ")
 	}
 	inSql, inArgs := session.Statement.genInSql()
 	if len(inSql) > 0 {
 		if len(condition) > 0 {
-			condition += " " + andStr + " "
+			condition += " AND "
 		}
 		condition += inSql
 		args = append(args, inArgs...)

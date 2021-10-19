@@ -34,8 +34,7 @@ type Engine struct {
 	ShowErr   bool
 	ShowDebug bool
 	ShowWarn  bool
-	//Pool      IConnectPool
-	//Filters []core.Filter
+
 	Logger     ILogger // io.Writer
 	TZLocation *time.Location
 }
@@ -456,15 +455,6 @@ func (engine *Engine) autoMap(bean interface{}) *core.Table {
 	return engine.autoMapType(v)
 }
 
-/*func (engine *Engine) mapType(t reflect.Type) *core.Table {
-	return mappingTable(t, engine.TableMapper, engine.ColumnMapper, engine.dialect, engine.TagIdentifier)
-}*/
-
-/*
-func mappingTable(t reflect.Type, tableMapper core.IMapper, colMapper core.IMapper, dialect core.Dialect, tagId string) *core.Table {
-	table := core.NewEmptyTable()
-	table.Name = tableMapper.Obj2Table(t.Name())
-*/
 func addIndex(indexName string, table *core.Table, col *core.Column, indexType int) {
 	if index, ok := table.Indexes[indexName]; ok {
 		index.AddColumn(col.Name)
@@ -524,17 +514,19 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 				if tags[0] == "-" {
 					continue
 				}
-				if (strings.ToUpper(tags[0]) == "EXTENDS") &&
-					(fieldType.Kind() == reflect.Struct) {
+				if strings.ToUpper(tags[0]) == "EXTENDS" {
+					fieldValue = reflect.Indirect(fieldValue)
+					if fieldValue.Kind() == reflect.Struct {
+						//parentTable := mappingTable(fieldType, tableMapper, colMapper, dialect, tagId)
+						parentTable := engine.mapType(fieldValue)
+						for _, col := range parentTable.Columns() {
+							col.FieldName = fmt.Sprintf("%v.%v", fieldValue.Type().Name(), col.FieldName)
+							table.AddColumn(col)
+						}
 
-					//parentTable := mappingTable(fieldType, tableMapper, colMapper, dialect, tagId)
-					parentTable := engine.mapType(fieldValue)
-					for _, col := range parentTable.Columns() {
-						col.FieldName = fmt.Sprintf("%v.%v", fieldType.Name(), col.FieldName)
-						table.AddColumn(col)
+						continue
 					}
-
-					continue
+					//TODO: warning
 				}
 
 				indexNames := make(map[string]int)
@@ -701,7 +693,7 @@ func (engine *Engine) IsTableEmpty(bean interface{}) (bool, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	rows, err := session.Count(bean)
-	return rows > 0, err
+	return rows == 0, err
 }
 
 // If a table is exist
@@ -836,7 +828,7 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 				session := engine.NewSession()
 				session.Statement.RefTable = table
 				defer session.Close()
-				isExist, err := session.isColumnExist(table.Name, col)
+				isExist, err := session.isColumnExist(table.Name, col.Name)
 				if err != nil {
 					return err
 				}
@@ -1120,11 +1112,7 @@ func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}
 	case core.Date:
 		v = engine.TZTime(t).Format("2006-01-02")
 	case core.DateTime, core.TimeStamp:
-		if engine.dialect.DBType() == "ql" {
-			v = engine.TZTime(t)
-		} else {
-			v = engine.TZTime(t).Format("2006-01-02 15:04:05")
-		}
+		v = engine.TZTime(t).Format("2006-01-02 15:04:05")
 	case core.TimeStampz:
 		if engine.dialect.DBType() == core.MSSQL {
 			v = engine.TZTime(t).Format("2006-01-02T15:04:05.9999999Z07:00")
