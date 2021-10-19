@@ -476,7 +476,7 @@ func (engine *Engine) mapType(t reflect.Type) *Table {
 						table.ColumnsSeq = append(table.ColumnsSeq, name)
 					}
 
-					table.PrimaryKeys = parentTable.PrimaryKeys
+					table.PrimaryKey = parentTable.PrimaryKey
 					continue
 				}
 				var indexType int
@@ -602,13 +602,12 @@ func (engine *Engine) mapType(t reflect.Type) *Table {
 		}
 	}
 
-	if idFieldColName != "" && len(table.PrimaryKeys) == 0 {
+	if idFieldColName != "" && table.PrimaryKey == "" {
 		col := table.Columns[idFieldColName]
 		col.IsPrimaryKey = true
 		col.IsAutoIncrement = true
 		col.Nullable = false
-		table.PrimaryKeys = append(table.PrimaryKeys, col.Name)
-		table.AutoIncrement = col.Name
+		table.PrimaryKey = col.Name
 	}
 
 	return table
@@ -932,6 +931,13 @@ func (engine *Engine) Iterate(bean interface{}, fun IterFunc) error {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Iterate(bean, fun)
+}
+
+// Similar to Iterate(), return a forward Iterator object for iterating record by record, bean's non-empty fields
+// are conditions.
+func (engine *Engine) Rows(bean interface{}) (*Rows, error) {
+	session := engine.NewSession()
+	return session.Rows(bean)
 }
 
 // Count counts the records. bean's non-empty fields
