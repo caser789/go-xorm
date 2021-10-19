@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/caser789/go-xorm/core"
+	"github.com/go-xorm/core"
 )
 
 // func init() {
@@ -106,11 +106,11 @@ func (db *mssql) IndexCheckSql(tableName, idxName string) (string, []interface{}
 	return sql, args
 }
 
-func (db *mssql) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
+/*func (db *mssql) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
 	args := []interface{}{tableName, colName}
 	sql := `SELECT "COLUMN_NAME" FROM "INFORMATION_SCHEMA"."COLUMNS" WHERE "TABLE_NAME" = ? AND "COLUMN_NAME" = ?`
 	return sql, args
-}
+}*/
 
 func (db *mssql) TableCheckSql(tableName string) (string, []interface{}) {
 	args := []interface{}{}
@@ -203,10 +203,7 @@ func (db *mssql) GetIndexes(tableName string) (map[string]*core.Index, error) {
 	s := `SELECT
 IXS.NAME                    AS  [INDEX_NAME],
 C.NAME                      AS  [COLUMN_NAME],
-IXS.is_unique AS [IS_UNIQUE],
-CASE    IXCS.IS_INCLUDED_COLUMN
-WHEN    0   THEN    'NONE'
-ELSE    'INCLUDED'  END     AS  [IS_INCLUDED_COLUMN]
+IXS.is_unique AS [IS_UNIQUE]
 FROM SYS.INDEXES IXS
 INNER JOIN SYS.INDEX_COLUMNS   IXCS
 ON IXS.OBJECT_ID=IXCS.OBJECT_ID  AND IXS.INDEX_ID = IXCS.INDEX_ID
@@ -259,7 +256,7 @@ WHERE IXS.TYPE_DESC='NONCLUSTERED' and OBJECT_NAME(IXS.OBJECT_ID) =?
 	return indexes, nil
 }
 
-func (db *mssql) CreateTablSql(table *core.Table, tableName, storeEngine, charset string) string {
+func (db *mssql) CreateTableSql(table *core.Table, tableName, storeEngine, charset string) string {
 	var sql string
 	if tableName == "" {
 		tableName = table.Name

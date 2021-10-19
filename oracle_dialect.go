@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/caser789/go-xorm/core"
+	"github.com/go-xorm/core"
 )
 
 // func init() {
@@ -87,10 +87,26 @@ func (db *oracle) TableCheckSql(tableName string) (string, []interface{}) {
 	return `SELECT table_name FROM user_tables WHERE table_name = ?`, args
 }
 
-func (db *oracle) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
+/*func (db *oracle) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
 	args := []interface{}{strings.ToUpper(tableName), strings.ToUpper(colName)}
 	return "SELECT column_name FROM USER_TAB_COLUMNS WHERE table_name = ?" +
 		" AND column_name = ?", args
+}*/
+
+func (db *oracle) IsColumnExist(tableName string, col *core.Column) (bool, error) {
+	args := []interface{}{strings.ToUpper(tableName), strings.ToUpper(col.Name)}
+	query := "SELECT column_name FROM USER_TAB_COLUMNS WHERE table_name = ?" +
+		" AND column_name = ?"
+	rows, err := db.DB().Query(query, args...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		return true, nil
+	}
+	return false, ErrNotExist
 }
 
 func (db *oracle) GetColumns(tableName string) ([]string, map[string]*core.Column, error) {
@@ -223,19 +239,6 @@ func (db *oracle) GetIndexes(tableName string) (map[string]*core.Index, error) {
 	return indexes, nil
 }
 
-// PgSeqFilter filter SQL replace ?, ? ... to :1, :2 ...
-type OracleSeqFilter struct {
-}
-
-func (s *OracleSeqFilter) Do(sql string, dialect core.Dialect, table *core.Table) string {
-	counts := strings.Count(sql, "?")
-	for i := 1; i <= counts; i++ {
-		newstr := ":" + fmt.Sprintf("%v", i)
-		sql = strings.Replace(sql, "?", newstr, 1)
-	}
-	return sql
-}
-
 func (db *oracle) Filters() []core.Filter {
-	return []core.Filter{&core.QuoteFilter{}, &OracleSeqFilter{}, &core.IdFilter{}}
+	return []core.Filter{&core.QuoteFilter{}, &core.SeqFilter{":", 1}, &core.IdFilter{}}
 }

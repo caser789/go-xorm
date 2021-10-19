@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caser789/go-xorm/core"
+	"github.com/go-xorm/core"
 )
 
 // Engine is the major struct of xorm, it means a database manager.
@@ -34,7 +34,6 @@ type Engine struct {
 	ShowErr   bool
 	ShowDebug bool
 	ShowWarn  bool
-	ShowInfo  bool
 	//Pool      IConnectPool
 	//Filters []core.Filter
 	Logger     ILogger // io.Writer
@@ -191,9 +190,7 @@ func (engine *Engine) LogError(contents ...interface{}) {
 
 // logging error
 func (engine *Engine) LogInfo(contents ...interface{}) {
-	if engine.ShowInfo {
-		engine.Logger.Info(fmt.Sprintln(contents...))
-	}
+	engine.Logger.Info(fmt.Sprintln(contents...))
 }
 
 // logging debug
@@ -839,7 +836,7 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 				session := engine.NewSession()
 				session.Statement.RefTable = table
 				defer session.Close()
-				isExist, err := session.isColumnExist(table.Name, col.Name)
+				isExist, err := session.isColumnExist(table.Name, col)
 				if err != nil {
 					return err
 				}

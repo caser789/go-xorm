@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caser789/go-xorm/core"
+	"github.com/go-xorm/core"
 )
 
 // Struct Session keep a pointer to sql.DB and provides all execution of all
@@ -1253,7 +1253,7 @@ func (session *Session) Ping() error {
 	return session.Db.Ping()
 }
 
-func (session *Session) isColumnExist(tableName, colName string) (bool, error) {
+func (session *Session) isColumnExist(tableName string, col *core.Column) (bool, error) {
 	err := session.newDb()
 	if err != nil {
 		return false, err
@@ -1262,9 +1262,10 @@ func (session *Session) isColumnExist(tableName, colName string) (bool, error) {
 	if session.IsAutoClose {
 		defer session.Close()
 	}
-	sqlStr, args := session.Engine.dialect.ColumnCheckSql(tableName, colName)
-	results, err := session.query(sqlStr, args...)
-	return len(results) > 0, err
+	return session.Engine.dialect.IsColumnExist(tableName, col)
+	//sqlStr, args := session.Engine.dialect.ColumnCheckSql(tableName, colName)
+	//results, err := session.query(sqlStr, args...)
+	//return len(results) > 0, err
 }
 
 func (session *Session) isTableExist(tableName string) (bool, error) {
@@ -1545,6 +1546,7 @@ func (session *Session) row2Bean(rows *core.Rows, fields []string, fieldsCount i
 				if fieldType == core.TimeType {
 					if rawValueType == core.TimeType {
 						hasAssigned = true
+
 						t := vv.Interface().(time.Time)
 						z, _ := t.Zone()
 						if len(z) == 0 || t.Year() == 0 { // !nashtsai! HACK tmp work around for lib/pq doesn't properly time with location
@@ -1553,7 +1555,11 @@ func (session *Session) row2Bean(rows *core.Rows, fields []string, fieldsCount i
 								t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 							vv = reflect.ValueOf(tt)
 						}
+						// !nashtsai! convert to engine location
+						t = vv.Interface().(time.Time).In(session.Engine.TZLocation)
+						vv = reflect.ValueOf(t)
 						fieldValue.Set(vv)
+
 						// t = fieldValue.Interface().(time.Time)
 						// z, _ = t.Zone()
 						// session.Engine.LogDebug("fieldValue key[%v]: %v | zone: %v | location: %+v\n", key, t, z, *t.Location())
@@ -3309,7 +3315,7 @@ func genCols(table *core.Table, session *Session, bean interface{}, useCol bool,
 		}
 
 		if (col.IsCreated || col.IsUpdated) && session.Statement.UseAutoTime {
-			args = append(args, time.Now())
+			args = append(args, session.Engine.NowTime(col.SQLType.Name))
 		} else if col.IsVersion && session.Statement.checkVersion {
 			args = append(args, 1)
 		} else {
