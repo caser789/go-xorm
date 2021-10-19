@@ -27,7 +27,7 @@ type Engine struct {
 	dialect        core.Dialect
 	Tables         map[reflect.Type]*core.Table
 
-	mutex        *sync.Mutex
+	mutex        *sync.RWMutex
 	ShowSQL      bool
 	ShowErr      bool
 	ShowDebug    bool
@@ -124,8 +124,8 @@ func (engine *Engine) MapCacher(bean interface{}, cacher core.Cacher) {
 }
 
 // OpenDB provides a interface to operate database directly.
-func (engine *Engine) OpenDB() (*sql.DB, error) {
-	return sql.Open(engine.DriverName, engine.DataSourceName)
+func (engine *Engine) OpenDB() (*core.DB, error) {
+	return core.Open(engine.DriverName, engine.DataSourceName)
 }
 
 // New a session
@@ -388,12 +388,14 @@ func (engine *Engine) Having(conditions string) *Session {
 }
 
 func (engine *Engine) autoMapType(t reflect.Type) *core.Table {
-	engine.mutex.Lock()
-	defer engine.mutex.Unlock()
+	engine.mutex.RLock()
 	table, ok := engine.Tables[t]
+	engine.mutex.RUnlock()
 	if !ok {
 		table = engine.mapType(t)
+		engine.mutex.Lock()
 		engine.Tables[t] = table
+		engine.mutex.Unlock()
 	}
 	return table
 }
@@ -515,6 +517,7 @@ func mappingTable(t reflect.Type, tableMapper core.IMapper, colMapper core.IMapp
 				if col.Length2 == 0 {
 					col.Length2 = col.SQLType.DefaultLength2
 				}
+				//fmt.Println("======", col)
 				if col.Name == "" {
 					col.Name = colMapper.Obj2Table(t.Field(i).Name)
 				}
