@@ -670,10 +670,22 @@ func (statement *Statement) getInc() map[string]incrParam {
 // Generate "Where column IN (?) " statment
 func (statement *Statement) In(column string, args ...interface{}) *Statement {
 	k := strings.ToLower(column)
-	if _, ok := statement.inColumns[k]; ok {
-		statement.inColumns[k].args = append(statement.inColumns[k].args, args...)
+	var newargs []interface{}
+	if len(args) == 1 &&
+		reflect.TypeOf(args[0]).Kind() == reflect.Slice {
+		newargs = make([]interface{}, 0)
+		v := reflect.ValueOf(args[0])
+		for i := 0; i < v.Len(); i++ {
+			newargs = append(newargs, v.Index(i).Interface())
+		}
 	} else {
-		statement.inColumns[k] = &inParam{column, args}
+		newargs = args
+	}
+
+	if _, ok := statement.inColumns[k]; ok {
+		statement.inColumns[k].args = append(statement.inColumns[k].args, newargs...)
+	} else {
+		statement.inColumns[k] = &inParam{column, newargs}
 	}
 	return statement
 }
@@ -927,7 +939,7 @@ func (statement *Statement) genGetSql(bean interface{}) (string, []interface{}) 
 
 func (s *Statement) genAddColumnStr(col *core.Column) (string, []interface{}) {
 	quote := s.Engine.Quote
-	sql := fmt.Sprintf("ALTER TABLE %v ADD COLUMN %v;", quote(s.TableName()),
+	sql := fmt.Sprintf("ALTER TABLE %v ADD %v;", quote(s.TableName()),
 		col.String(s.Engine.dialect))
 	return sql, []interface{}{}
 }
@@ -974,20 +986,58 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 		distinct = "DISTINCT "
 	}
 
-	// !nashtsai! REVIEW Sprintf is considered slowest mean of string concatnation, better to work with builder pattern
-	a = fmt.Sprintf("SELECT %v%v FROM %v", distinct, columnStr,
-		statement.Engine.Quote(statement.TableName()))
-	if statement.JoinStr != "" {
-		a = fmt.Sprintf("%v %v", a, statement.JoinStr)
+	var top string
+	var mssqlCondi string
+	var orderBy string
+	if statement.OrderStr != "" {
+		orderBy = fmt.Sprintf(" ORDER BY %v", statement.OrderStr)
 	}
 	statement.processIdParam()
+	var whereStr string
 	if statement.WhereStr != "" {
-		a = fmt.Sprintf("%v WHERE %v", a, statement.WhereStr)
+		whereStr = fmt.Sprintf(" WHERE %v", statement.WhereStr)
 		if statement.ConditionStr != "" {
-			a = fmt.Sprintf("%v AND %v", a, statement.ConditionStr)
+			whereStr = fmt.Sprintf("%v AND %v", whereStr, statement.ConditionStr)
 		}
 	} else if statement.ConditionStr != "" {
-		a = fmt.Sprintf("%v WHERE %v", a, statement.ConditionStr)
+		whereStr = fmt.Sprintf(" WHERE %v", statement.ConditionStr)
+	}
+	var fromStr string = " FROM " + statement.Engine.Quote(statement.TableName())
+	if statement.JoinStr != "" {
+		fromStr = fmt.Sprintf("%v %v", fromStr, statement.JoinStr)
+	}
+
+	if statement.Engine.dialect.DBType() == core.MSSQL {
+		if statement.LimitN > 0 {
+			top = fmt.Sprintf(" TOP %d ", statement.LimitN)
+		}
+		if statement.Start > 0 {
+			var column string = "(id)"
+			if len(statement.RefTable.PKColumns()) == 0 {
+				for _, index := range statement.RefTable.Indexes {
+					if len(index.Cols) == 1 {
+						column = index.Cols[0]
+						break
+					}
+				}
+				if len(column) == 0 {
+					column = statement.RefTable.ColumnsSeq()[0]
+				}
+			}
+			mssqlCondi = fmt.Sprintf("(%s NOT IN (SELECT TOP %d %s%s%s%s))",
+				column, statement.Start, column, fromStr, whereStr, orderBy)
+		}
+	}
+
+	// !nashtsai! REVIEW Sprintf is considered slowest mean of string concatnation, better to work with builder pattern
+	a = fmt.Sprintf("SELECT %v%v%v%v%v", top, distinct, columnStr,
+		fromStr, whereStr)
+	if mssqlCondi != "" {
+		if whereStr != "" {
+			a += " AND " + mssqlCondi
+		} else {
+			a += " WHERE " + mssqlCondi
+		}
 	}
 
 	if statement.GroupByStr != "" {
@@ -1005,11 +1055,6 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 		} else if statement.LimitN > 0 {
 			a = fmt.Sprintf("%v LIMIT %v", a, statement.LimitN)
 		}
-	} else {
-		//TODO: for mssql, should handler limit.
-		/*SELECT * FROM (
-		  SELECT *, ROW_NUMBER() OVER (ORDER BY id desc) as row FROM "userinfo"
-		 ) a WHERE row > [start] and row <= [start+limit] order by id desc*/
 	}
 
 	return

@@ -106,11 +106,11 @@ func (db *mssql) IndexCheckSql(tableName, idxName string) (string, []interface{}
 	return sql, args
 }
 
-/*func (db *mssql) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
+func (db *mssql) ColumnCheckSql(tableName, colName string) (string, []interface{}) {
 	args := []interface{}{tableName, colName}
 	sql := `SELECT "COLUMN_NAME" FROM "INFORMATION_SCHEMA"."COLUMNS" WHERE "TABLE_NAME" = ? AND "COLUMN_NAME" = ?`
 	return sql, args
-}*/
+}
 
 func (db *mssql) TableCheckSql(tableName string) (string, []interface{}) {
 	args := []interface{}{}
@@ -211,6 +211,7 @@ INNER   JOIN SYS.COLUMNS C  ON IXS.OBJECT_ID=C.OBJECT_ID
 AND IXCS.COLUMN_ID=C.COLUMN_ID
 WHERE IXS.TYPE_DESC='NONCLUSTERED' and OBJECT_NAME(IXS.OBJECT_ID) =?
 `
+
 	rows, err := db.DB().Query(s, args...)
 	if err != nil {
 		return nil, err
@@ -221,7 +222,7 @@ WHERE IXS.TYPE_DESC='NONCLUSTERED' and OBJECT_NAME(IXS.OBJECT_ID) =?
 		var indexType int
 		var indexName, colName, isUnique string
 
-		err = rows.Scan(&indexName, &colName, &isUnique, nil)
+		err = rows.Scan(&indexName, &colName, &isUnique)
 		if err != nil {
 			return nil, err
 		}
