@@ -297,6 +297,7 @@ func (engine *Engine) DumpAll(w io.Writer) error {
 		if err != nil {
 			return err
 		}
+
 		cols, err := rows.Columns()
 		if err != nil {
 			return err
@@ -317,15 +318,17 @@ func (engine *Engine) DumpAll(w io.Writer) error {
 			}
 
 			var temp string
-			for _, d := range dest {
+			for i, d := range dest {
+				col := table.GetColumn(cols[i])
 				if d == nil {
 					temp += ", NULL"
-				} else if reflect.TypeOf(d).Kind() == reflect.String {
-					temp += ", '" + strings.Replace(d.(string), "'", "''", -1) + "'"
-				} else if reflect.TypeOf(d).Kind() == reflect.Slice {
+				} else if col.SQLType.IsText() || col.SQLType.IsTime() {
+					var v = fmt.Sprintf("%s", d)
+					temp += ", '" + strings.Replace(v, "'", "''", -1) + "'"
+				} else if col.SQLType.IsBlob() /*reflect.TypeOf(d).Kind() == reflect.Slice*/ {
 					temp += fmt.Sprintf(", %s", engine.dialect.FormatBytes(d.([]byte)))
 				} else {
-					temp += fmt.Sprintf(", %v", d)
+					temp += fmt.Sprintf(", %s", d)
 				}
 			}
 			_, err = io.WriteString(w, temp[2:]+");\n\n")
@@ -663,20 +666,30 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 								continue
 							}
 							col.SQLType = core.SQLType{fs[0], 0, 0}
-							fs2 := strings.Split(fs[1][0:len(fs[1])-1], ",")
-							if len(fs2) == 2 {
-								col.Length, err = strconv.Atoi(fs2[0])
-								if err != nil {
-									engine.LogError(err)
+							if fs[0] == core.Enum && fs[1][0] == '\'' { //enum
+								options := strings.Split(fs[1][0:len(fs[1])-1], ",")
+								col.EnumOptions = make(map[string]int)
+								for k, v := range options {
+									v = strings.TrimSpace(v)
+									v = strings.Trim(v, "'")
+									col.EnumOptions[v] = k
 								}
-								col.Length2, err = strconv.Atoi(fs2[1])
-								if err != nil {
-									engine.LogError(err)
-								}
-							} else if len(fs2) == 1 {
-								col.Length, err = strconv.Atoi(fs2[0])
-								if err != nil {
-									engine.LogError(err)
+							} else {
+								fs2 := strings.Split(fs[1][0:len(fs[1])-1], ",")
+								if len(fs2) == 2 {
+									col.Length, err = strconv.Atoi(fs2[0])
+									if err != nil {
+										engine.LogError(err)
+									}
+									col.Length2, err = strconv.Atoi(fs2[1])
+									if err != nil {
+										engine.LogError(err)
+									}
+								} else if len(fs2) == 1 {
+									col.Length, err = strconv.Atoi(fs2[0])
+									if err != nil {
+										engine.LogError(err)
+									}
 								}
 							}
 						} else {
