@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/caser789/go-xorm/core"
 )
@@ -33,9 +34,11 @@ type Engine struct {
 	ShowErr   bool
 	ShowDebug bool
 	ShowWarn  bool
+	ShowInfo  bool
 	//Pool      IConnectPool
 	//Filters []core.Filter
-	Logger ILogger // io.Writer
+	Logger     ILogger // io.Writer
+	TZLocation *time.Location
 }
 
 func (engine *Engine) DriverName() string {
@@ -188,7 +191,9 @@ func (engine *Engine) LogError(contents ...interface{}) {
 
 // logging error
 func (engine *Engine) LogInfo(contents ...interface{}) {
-	engine.Logger.Info(fmt.Sprintln(contents...))
+	if engine.ShowInfo {
+		engine.Logger.Info(fmt.Sprintln(contents...))
+	}
 }
 
 // logging debug
@@ -1099,4 +1104,34 @@ func (engine *Engine) Import(ddlPath string) ([]sql.Result, error) {
 		}
 	}
 	return results, lastError
+}
+
+func (engine *Engine) TZTime(t time.Time) time.Time {
+	return t.In(engine.TZLocation)
+}
+
+func (engine *Engine) NowTime(sqlTypeName string) interface{} {
+	t := time.Now()
+	return engine.FormatTime(sqlTypeName, t)
+}
+
+func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}) {
+	switch sqlTypeName {
+	case core.Time:
+		s := engine.TZTime(t).Format("2006-01-02 15:04:05") //time.RFC3339
+		v = s[11:19]
+	case core.Date:
+		v = engine.TZTime(t).Format("2006-01-02")
+	case core.DateTime, core.TimeStamp:
+		v = engine.TZTime(t).Format("2006-01-02 15:04:05")
+	case core.TimeStampz:
+		if engine.dialect.DBType() == core.MSSQL {
+			v = engine.TZTime(t).Format("2006-01-02T15:04:05.9999999Z07:00")
+		} else {
+			v = engine.TZTime(t).Format(time.RFC3339Nano)
+		}
+	default:
+		v = engine.TZTime(t)
+	}
+	return
 }
