@@ -588,7 +588,6 @@ func (statement *Statement) convertIdSql(sqlStr string) string {
 			if len(sqls) != 2 {
 				return ""
 			}
-			fmt.Println("-----", col)
 			newsql := fmt.Sprintf("SELECT %v.%v FROM %v", statement.Engine.Quote(statement.TableName()),
 				statement.Engine.Quote(col.Name), sqls[1])
 			return newsql

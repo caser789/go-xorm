@@ -1,8 +1,15 @@
 package core
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
+)
+
+const (
+	TWOSIDES = iota + 1
+	ONLYTODB
+	ONLYFROMDB
 )
 
 // database column
@@ -22,6 +29,12 @@ type Column struct {
 	IsUpdated       bool
 	IsCascade       bool
 	IsVersion       bool
+	fieldPath       []string
+}
+
+func NewColumn(name, fieldName string, sqlType SQLType, len1, len2 int, nullable bool) *Column {
+	return &Column{name, fieldName, sqlType, len1, len2, nullable, "", make(map[string]bool), false, false,
+		TWOSIDES, false, false, false, false, nil}
 }
 
 // generate column description string according dialect
@@ -69,18 +82,32 @@ func (col *Column) StringNoPk(d Dialect) string {
 }
 
 // return col's filed of struct's value
-func (col *Column) ValueOf(bean interface{}) reflect.Value {
-	var fieldValue reflect.Value
-	if strings.Contains(col.FieldName, ".") {
-		fields := strings.Split(col.FieldName, ".")
-		if len(fields) > 2 {
-			return reflect.ValueOf(nil)
-		}
+func (col *Column) ValueOf(bean interface{}) (*reflect.Value, error) {
+	dataStruct := reflect.Indirect(reflect.ValueOf(bean))
+	return col.ValueOfV(&dataStruct)
+}
 
-		fieldValue = reflect.Indirect(reflect.ValueOf(bean)).FieldByName(fields[0])
-		fieldValue = fieldValue.FieldByName(fields[1])
-	} else {
-		fieldValue = reflect.Indirect(reflect.ValueOf(bean)).FieldByName(col.FieldName)
+func (col *Column) ValueOfV(dataStruct *reflect.Value) (*reflect.Value, error) {
+	var fieldValue reflect.Value
+	var err error
+	if col.fieldPath == nil {
+		col.fieldPath = strings.Split(col.FieldName, ".")
 	}
-	return fieldValue
+
+	if len(col.fieldPath) == 1 {
+		fieldValue = dataStruct.FieldByName(col.FieldName)
+	} else if len(col.fieldPath) == 2 {
+		parentField := dataStruct.FieldByName(col.fieldPath[0])
+		if parentField.IsValid() {
+			fieldValue = parentField.FieldByName(col.fieldPath[1])
+		} else {
+			err = fmt.Errorf("field  %v is not valid", col.FieldName)
+		}
+	} else {
+		err = fmt.Errorf("Unsupported mutliderive %v", col.FieldName)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &fieldValue, nil
 }

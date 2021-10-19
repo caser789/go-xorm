@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"reflect"
+	"sync"
 )
 
 type DB struct {
@@ -13,7 +14,7 @@ type DB struct {
 
 func Open(driverName, dataSourceName string) (*DB, error) {
 	db, err := sql.Open(driverName, dataSourceName)
-	return &DB{db, &SnakeMapper{}}, err
+	return &DB{db, NewCacheMapper(&SnakeMapper{})}, err
 }
 
 func (db *DB) Query(query string, args ...interface{}) (*Rows, error) {
@@ -27,21 +28,49 @@ type Rows struct {
 }
 
 // scan data to a struct's pointer according field index
-func (rs *Rows) ScanStruct(dest interface{}) error {
-	vv := reflect.ValueOf(dest)
-	if vv.Kind() != reflect.Ptr || vv.Elem().Kind() != reflect.Struct {
-		return errors.New("dest should be a struct's pointer")
+func (rs *Rows) ScanStruct(dest ...interface{}) error {
+	if len(dest) == 0 {
+		return errors.New("at least one struct")
 	}
 
-	vvv := vv.Elem()
-	newDest := make([]interface{}, vvv.NumField())
+	vvvs := make([]reflect.Value, len(dest))
+	for i, s := range dest {
+		vv := reflect.ValueOf(s)
+		if vv.Kind() != reflect.Ptr || vv.Elem().Kind() != reflect.Struct {
+			return errors.New("dest should be a struct's pointer")
+		}
 
-	for j := 0; j < vvv.NumField(); j++ {
-		newDest[j] = vvv.Field(j).Addr().Interface()
+		vvvs[i] = vv.Elem()
+	}
+
+	cols, err := rs.Columns()
+	if err != nil {
+		return err
+	}
+	newDest := make([]interface{}, len(cols))
+
+	var i = 0
+	for _, vvv := range vvvs {
+		for j := 0; j < vvv.NumField(); j++ {
+			newDest[i] = vvv.Field(j).Addr().Interface()
+			i = i + 1
+		}
 	}
 
 	return rs.Rows.Scan(newDest...)
 }
+
+type EmptyScanner struct {
+}
+
+func (EmptyScanner) Scan(src interface{}) error {
+	return nil
+}
+
+var (
+	fieldCache      = make(map[reflect.Type]map[string]int)
+	fieldCacheMutex sync.RWMutex
+)
 
 // scan data to a struct's pointer according field name
 func (rs *Rows) ScanStruct2(dest interface{}) error {
@@ -56,14 +85,27 @@ func (rs *Rows) ScanStruct2(dest interface{}) error {
 	}
 
 	vvv := vv.Elem()
-	newDest := make([]interface{}, len(cols))
+	t := vvv.Type()
 
+	fieldCacheMutex.RLock()
+	cache, ok := fieldCache[t]
+	fieldCacheMutex.RUnlock()
+	if !ok {
+		cache = make(map[string]int)
+		for i := 0; i < vvv.NumField(); i++ {
+			cache[vvv.Type().Field(i).Name] = i
+		}
+		fieldCacheMutex.Lock()
+		fieldCache[t] = cache
+		fieldCacheMutex.Unlock()
+	}
+
+	newDest := make([]interface{}, len(cols))
+	var v EmptyScanner
 	for j, name := range cols {
-		f := vvv.FieldByName(rs.Mapper.Table2Obj(name))
-		if f.IsValid() {
-			newDest[j] = f.Addr().Interface()
+		if i, ok := cache[rs.Mapper.Table2Obj(name)]; ok {
+			newDest[j] = vvv.Field(i).Addr().Interface()
 		} else {
-			var v interface{}
 			newDest[j] = &v
 		}
 	}
