@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caser789/go-xorm/core"
 	"github.com/caser789/go-xorm/caches"
+	"github.com/caser789/go-xorm/core"
 	_ "github.com/caser789/go-xorm/drivers"
 )
 
