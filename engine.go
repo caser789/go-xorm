@@ -933,13 +933,6 @@ func (engine *Engine) Iterate(bean interface{}, fun IterFunc) error {
 	return session.Iterate(bean, fun)
 }
 
-// Similar to Iterate(), return a forward Iterator object for iterating record by record, bean's non-empty fields
-// are conditions.
-func (engine *Engine) Rows(bean interface{}) (*Rows, error) {
-	session := engine.NewSession()
-	return session.Rows(bean)
-}
-
 // Count counts the records. bean's non-empty fields
 // are conditions.
 func (engine *Engine) Count(bean interface{}) (int64, error) {
@@ -979,18 +972,22 @@ func (engine *Engine) Import(ddlPath string) ([]sql.Result, error) {
 	scanner.Split(semiColSpliter)
 
 	session := engine.NewSession()
-	session.IsAutoClose = false
+	defer session.Close()
+	err = session.newDb()
+	if err != nil {
+		return results, err
+	}
+
 	for scanner.Scan() {
 		query := scanner.Text()
 		query = strings.Trim(query, " \t")
 		if len(query) > 0 {
-			result, err := session.Exec(query)
+			result, err := session.Db.Exec(query)
 			results = append(results, result)
 			if err != nil {
 				lastError = err
 			}
 		}
 	}
-	session.Close()
 	return results, lastError
 }

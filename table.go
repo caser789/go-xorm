@@ -163,6 +163,7 @@ func Type2SQLType(t reflect.Type) (st SQLType) {
 		if t == reflect.TypeOf(c_TIME_DEFAULT) {
 			st = SQLType{DateTime, 0, 0}
 		} else {
+			// TODO need to handle association struct
 			st = SQLType{Text, 0, 0}
 		}
 	case reflect.Ptr:
@@ -339,17 +340,16 @@ func (col *Column) ValueOf(bean interface{}) reflect.Value {
 
 // database table
 type Table struct {
-	Name          string
-	Type          reflect.Type
-	ColumnsSeq    []string
-	Columns       map[string]*Column
-	Indexes       map[string]*Index
-	PrimaryKeys   []string
-	AutoIncrement string
-	Created       map[string]bool
-	Updated       string
-	Version       string
-	Cacher        Cacher
+	Name       string
+	Type       reflect.Type
+	ColumnsSeq []string
+	Columns    map[string]*Column
+	Indexes    map[string]*Index
+	PrimaryKey string
+	Created    map[string]bool
+	Updated    string
+	Version    string
+	Cacher     Cacher
 }
 
 /*
@@ -363,31 +363,20 @@ func NewTable(name string, t reflect.Type) *Table {
 }*/
 
 // if has primary key, return column
-func (table *Table) PKColumns() []*Column {
-	columns := make([]*Column, 0)
-	for _, name := range table.PrimaryKeys {
-		columns = append(columns, table.Columns[strings.ToLower(name)])
-	}
-	return columns
-}
-
-func (table *Table) AutoIncrColumn() *Column {
-	return table.Columns[strings.ToLower(table.AutoIncrement)]
+func (table *Table) PKColumn() *Column {
+	return table.Columns[table.PrimaryKey]
 }
 
 func (table *Table) VersionColumn() *Column {
-	return table.Columns[strings.ToLower(table.Version)]
+	return table.Columns[table.Version]
 }
 
 // add a column to table
 func (table *Table) AddColumn(col *Column) {
 	table.ColumnsSeq = append(table.ColumnsSeq, col.Name)
-	table.Columns[strings.ToLower(col.Name)] = col
+	table.Columns[col.Name] = col
 	if col.IsPrimaryKey {
-		table.PrimaryKeys = append(table.PrimaryKeys, col.Name)
-	}
-	if col.IsAutoIncrement {
-		table.AutoIncrement = col.Name
+		table.PrimaryKey = col.Name
 	}
 	if col.IsCreated {
 		table.Created[col.Name] = true
@@ -420,21 +409,8 @@ func (table *Table) genCols(session *Session, bean interface{}, useCol bool, inc
 		}
 
 		fieldValue := col.ValueOf(bean)
-		if col.IsAutoIncrement {
-			switch fieldValue.Type().Kind() {
-			case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int, reflect.Int64:
-				if fieldValue.Int() == 0 {
-					continue
-				}
-			case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint, reflect.Uint64:
-				if fieldValue.Uint() == 0 {
-					continue
-				}
-			case reflect.String:
-				if len(fieldValue.String()) == 0 {
-					continue
-				}
-			}
+		if col.IsAutoIncrement && fieldValue.Int() == 0 {
+			continue
 		}
 
 		if session.Statement.ColumnStr != "" {
