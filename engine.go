@@ -88,14 +88,8 @@ func (engine *Engine) AutoIncrStr() string {
 	return engine.dialect.AutoIncrStr()
 }
 
-// Set engine's pool, the pool default is Go's standard library's connection pool.
-/*func (engine *Engine) SetPool(pool IConnectPool) error {
-	engine.Pool = pool
-	return engine.Pool.Init(engine)
-}*/
-
-// SetMaxConns is only available for go 1.2+
-func (engine *Engine) SetMaxConns(conns int) {
+// SetMaxOpenConns is only available for go 1.2+
+func (engine *Engine) SetMaxOpenConns(conns int) {
 	engine.db.SetMaxOpenConns(conns)
 }
 
@@ -130,13 +124,17 @@ func (engine *Engine) MapCacher(bean interface{}, cacher core.Cacher) {
 	engine.Tables[v.Type()].Cacher = cacher
 }
 
-// OpenDB provides a interface to operate database directly.
+// NewDB provides an interface to operate database directly
 func (engine *Engine) NewDB() (*core.DB, error) {
 	return core.OpenDialect(engine.dialect)
 }
 
 func (engine *Engine) DB() *core.DB {
 	return engine.db
+}
+
+func (engine *Engine) Dialect() core.Dialect {
+	return engine.dialect
 }
 
 // New a session
@@ -151,7 +149,7 @@ func (engine *Engine) Close() error {
 	return engine.db.Close()
 }
 
-// Ping tests if database is alive.
+// Ping tests if database is alive
 func (engine *Engine) Ping() error {
 	session := engine.NewSession()
 	defer session.Close()
