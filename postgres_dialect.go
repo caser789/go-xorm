@@ -12,6 +12,9 @@ import (
 // func init() {
 // 	RegisterDialect("postgres", &postgres{})
 // }
+var (
+	postgresReservedWords = map[string]bool{}
+)
 
 type postgres struct {
 	core.Base
@@ -71,6 +74,15 @@ func (db *postgres) SqlType(c *core.Column) string {
 
 func (db *postgres) SupportInsertMany() bool {
 	return true
+}
+
+func (db *postgres) IsReserved(name string) bool {
+	_, ok := postgresReservedWords[name]
+	return ok
+}
+
+func (db *postgres) Quote(name string) string {
+	return "\"" + name + "\""
 }
 
 func (db *postgres) QuoteStr() string {
@@ -196,9 +208,11 @@ WHERE c.relkind = 'r'::char AND c.relname = $1 AND f.attnum > 0 ORDER BY f.attnu
 				col.Default = *colDefault
 			}
 		}
+
 		if colDefault != nil && strings.HasPrefix(*colDefault, "nextval(") {
 			col.IsAutoIncrement = true
 		}
+
 		col.Nullable = (isNullable == "YES")
 
 		switch dataType {

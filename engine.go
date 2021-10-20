@@ -362,7 +362,7 @@ func (engine *Engine) DumpAll(w io.Writer) error {
 	}
 
 	for _, table := range tables {
-		_, err = io.WriteString(w, engine.dialect.CreateTableSql(table, "", "", "")+"\n\n")
+		_, err = io.WriteString(w, engine.dialect.CreateTableSql(table, "", table.StoreEngine, "")+"\n\n")
 		if err != nil {
 			return err
 		}
@@ -412,7 +412,12 @@ func (engine *Engine) DumpAll(w io.Writer) error {
 						temp += fmt.Sprintf(", '%s'", d.(string))
 					}
 				} else if col.SQLType.IsNumeric() {
-					temp += fmt.Sprintf(", %s", string(d.([]byte)))
+					switch reflect.TypeOf(d).Kind() {
+					case reflect.Slice:
+						temp += fmt.Sprintf(", %s", string(d.([]byte)))
+					default:
+						temp += fmt.Sprintf(", %v", d)
+					}
 				} else {
 					s := fmt.Sprintf("%v", d)
 					if strings.Contains(s, ":") || strings.Contains(s, "-") {
@@ -1141,8 +1146,11 @@ func (engine *Engine) Sync2(beans ...interface{}) error {
 		return err
 	}
 
+	structTables := make([]*core.Table, 0)
+
 	for _, bean := range beans {
 		table := engine.TableInfo(bean)
+		structTables = append(structTables, table)
 
 		var oriTable *core.Table
 		for _, tb := range tables {
@@ -1264,6 +1272,28 @@ func (engine *Engine) Sync2(beans ...interface{}) error {
 						return err
 					}
 				}
+			}
+		}
+	}
+
+	for _, table := range tables {
+		var oriTable *core.Table
+		for _, structTable := range structTables {
+			if table.Name == structTable.Name {
+				oriTable = structTable
+				break
+			}
+		}
+
+		if oriTable == nil {
+			//engine.LogWarnf("Table %s has no struct to mapping it", table.Name)
+			continue
+		}
+
+		for _, colName := range table.ColumnsSeq() {
+			if oriTable.GetColumn(colName) == nil {
+				engine.LogWarnf("Table %s has column %s but struct has not related field",
+					table.Name, colName)
 			}
 		}
 	}
