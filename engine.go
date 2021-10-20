@@ -31,6 +31,7 @@ type Engine struct {
 	mutex  *sync.RWMutex
 	Cacher core.Cacher
 
+	ShowInfo  bool
 	ShowSQL   bool
 	ShowErr   bool
 	ShowDebug bool
@@ -38,14 +39,6 @@ type Engine struct {
 
 	Logger     ILogger // io.Writer
 	TZLocation *time.Location
-
-	disableGlobalCache bool
-}
-
-func (engine *Engine) SetDisableGlobalCache(disable bool) {
-	if engine.disableGlobalCache != disable {
-		engine.disableGlobalCache = disable
-	}
 }
 
 func (engine *Engine) DriverName() string {
@@ -198,7 +191,9 @@ func (engine *Engine) LogError(contents ...interface{}) {
 
 // logging error
 func (engine *Engine) LogInfo(contents ...interface{}) {
-	engine.Logger.Info(fmt.Sprintln(contents...))
+	if engine.ShowInfo {
+		engine.Logger.Info(fmt.Sprintln(contents...))
+	}
 }
 
 // logging debug
@@ -333,10 +328,19 @@ func (engine *Engine) DumpAll(w io.Writer) error {
 				} else if col.SQLType.IsText() || col.SQLType.IsTime() {
 					var v = fmt.Sprintf("%s", d)
 					temp += ", '" + strings.Replace(v, "'", "''", -1) + "'"
-				} else if col.SQLType.IsBlob() /*reflect.TypeOf(d).Kind() == reflect.Slice*/ {
-					temp += fmt.Sprintf(", %s", engine.dialect.FormatBytes(d.([]byte)))
+				} else if col.SQLType.IsBlob() /**/ {
+					if reflect.TypeOf(d).Kind() == reflect.Slice {
+						temp += fmt.Sprintf(", %s", engine.dialect.FormatBytes(d.([]byte)))
+					} else if reflect.TypeOf(d).Kind() == reflect.String {
+						temp += fmt.Sprintf(", '%s'", d.(string))
+					}
 				} else {
-					temp += fmt.Sprintf(", %s", d)
+					s := fmt.Sprintf("%v", d)
+					if strings.Contains(s, ":") || strings.Contains(s, "-") {
+						temp += fmt.Sprintf(", '%s'", s)
+					} else {
+						temp += fmt.Sprintf(", %s", s)
+					}
 				}
 			}
 			_, err = io.WriteString(w, temp[2:]+");\n\n")
@@ -552,37 +556,8 @@ func addIndex(indexName string, table *core.Table, col *core.Column, indexType i
 
 func (engine *Engine) newTable() *core.Table {
 	table := core.NewEmptyTable()
-
-	if !engine.disableGlobalCache {
-		table.Cacher = engine.Cacher
-	}
+	table.Cacher = engine.Cacher
 	return table
-}
-
-func (engine *Engine) processCacherTag(table *core.Table, v reflect.Value, cacherTagStr string) {
-
-	for _, part := range strings.Split(cacherTagStr, ",") {
-		switch {
-		case part == "false": // even if engine has assigned cacher, this table will not have cache support
-			table.Cacher = nil
-			return
-
-		case part == "true": // use default 'read-write' cache
-			if engine.Cacher != nil { // !nash! use engine's cacher if provided
-				table.Cacher = engine.Cacher
-			} else {
-				table.Cacher = NewLRUCacher2(NewMemoryStore(), time.Hour, 10000) // !nashtsai! HACK use LRU cacher for now
-			}
-			return
-			// TODO
-			// case strings.HasPrefix(part, "usage:"):
-			// 	usageStr := part[len("usage:"):]
-
-			// case strings.HasPrefix(part, "include:"):
-			// 	includeStr := part[len("include:"):]
-		}
-
-	}
 }
 
 func (engine *Engine) mapType(v reflect.Value) *core.Table {
@@ -610,19 +585,9 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 	var idFieldColName string
 	var err error
 
-	hasProcessedCacheTag := false
-
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag
 		ormTagStr := tag.Get(engine.TagIdentifier)
-		if !hasProcessedCacheTag {
-			cacheTagStr := tag.Get("xorm_cache")
-			if cacheTagStr != "" {
-				hasProcessedCacheTag = true
-				engine.processCacherTag(table, v, cacheTagStr)
-			}
-		}
-
 		var col *core.Column
 		fieldValue := v.Field(i)
 		fieldType := fieldValue.Type()
@@ -637,15 +602,10 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 					continue
 				}
 				if strings.ToUpper(tags[0]) == "EXTENDS" {
-
-					//fieldValue = reflect.Indirect(fieldValue)
-					//fmt.Println("----", fieldValue.Kind())
 					if fieldValue.Kind() == reflect.Struct {
-						//parentTable := mappingTable(fieldType, tableMapper, colMapper, dialect, tagId)
 						parentTable := engine.mapType(fieldValue)
 						for _, col := range parentTable.Columns() {
 							col.FieldName = fmt.Sprintf("%v.%v", t.Field(i).Name, col.FieldName)
-							//fmt.Println("---", col.FieldName)
 							table.AddColumn(col)
 						}
 
@@ -657,7 +617,6 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 							if !fieldValue.IsValid() || fieldValue.IsNil() {
 								fieldValue = reflect.New(f).Elem()
 							}
-							//fmt.Println("00000", fieldValue)
 						}
 
 						parentTable := engine.mapType(fieldValue)
@@ -779,7 +738,7 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 				if col.Length2 == 0 {
 					col.Length2 = col.SQLType.DefaultLength2
 				}
-				//fmt.Println("======", col)
+
 				if col.Name == "" {
 					col.Name = engine.ColumnMapper.Obj2Table(t.Field(i).Name)
 				}
@@ -1213,17 +1172,20 @@ func (engine *Engine) Count(bean interface{}) (int64, error) {
 }
 
 // Import SQL DDL file
-func (engine *Engine) Import(ddlPath string) ([]sql.Result, error) {
-
+func (engine *Engine) ImportFile(ddlPath string) ([]sql.Result, error) {
 	file, err := os.Open(ddlPath)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
+	return engine.Import(file)
+}
 
+// Import SQL DDL file
+func (engine *Engine) Import(r io.Reader) ([]sql.Result, error) {
 	var results []sql.Result
 	var lastError error
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 
 	semiColSpliter := func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
@@ -1244,7 +1206,7 @@ func (engine *Engine) Import(ddlPath string) ([]sql.Result, error) {
 
 	session := engine.NewSession()
 	defer session.Close()
-	err = session.newDb()
+	err := session.newDb()
 	if err != nil {
 		return results, err
 	}
