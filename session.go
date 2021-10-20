@@ -46,10 +46,6 @@ type Session struct {
 
 	stmtCache   map[uint32]*core.Stmt //key: hash.Hash32 of (queryStr, len(queryStr))
 	cascadeDeep int
-
-	// !evalphobia! stored the last executed query on this session
-	lastSQL                string
-	lastSQLArgs            []interface{}
 }
 
 // Method Init reset the session as the init status.
@@ -67,9 +63,6 @@ func (session *Session) Init() {
 	session.afterDeleteBeans = make(map[interface{}]*[]func(interface{}), 0)
 	session.beforeClosures = make([]func(interface{}), 0)
 	session.afterClosures = make([]func(interface{}), 0)
-
-	session.lastSQL = ""
-	session.lastSQLArgs = []interface{}{}
 }
 
 // Method Close release the connection from pool
@@ -332,7 +325,8 @@ func (session *Session) Begin() error {
 		session.IsAutoCommit = false
 		session.IsCommitedOrRollbacked = false
 		session.Tx = tx
-		session.saveLastSQL("BEGIN TRANSACTION")
+
+		session.Engine.logSQL("BEGIN TRANSACTION")
 	}
 	return nil
 }
@@ -340,7 +334,7 @@ func (session *Session) Begin() error {
 // When using transaction, you can rollback if any error
 func (session *Session) Rollback() error {
 	if !session.IsAutoCommit && !session.IsCommitedOrRollbacked {
-		session.saveLastSQL(session.Engine.dialect.RollBackStr())
+		session.Engine.logSQL(session.Engine.dialect.RollBackStr())
 		session.IsCommitedOrRollbacked = true
 		return session.Tx.Rollback()
 	}
@@ -350,7 +344,7 @@ func (session *Session) Rollback() error {
 // When using transaction, Commit will commit all operations.
 func (session *Session) Commit() error {
 	if !session.IsAutoCommit && !session.IsCommitedOrRollbacked {
-		session.saveLastSQL("COMMIT")
+		session.Engine.logSQL("COMMIT")
 		session.IsCommitedOrRollbacked = true
 		var err error
 		if err = session.Tx.Commit(); err == nil {
@@ -471,7 +465,7 @@ func (session *Session) exec(sqlStr string, args ...interface{}) (sql.Result, er
 		sqlStr = filter.Do(sqlStr, session.Engine.dialect, session.Statement.RefTable)
 	}
 
-	session.saveLastSQL(sqlStr, args...)
+	session.Engine.logSQL(sqlStr, args...)
 
 	return session.Engine.LogSQLExecutionTime(sqlStr, args, func() (sql.Result, error) {
 		if session.IsAutoCommit {
@@ -1463,7 +1457,7 @@ func (session *Session) isTableEmpty(tableName string) (bool, error) {
 	var total int64
 	sql := fmt.Sprintf("select count(*) from %s", session.Engine.Quote(tableName))
 	err := session.DB().QueryRow(sql).Scan(&total)
-	session.saveLastSQL(sql)
+	session.Engine.logSQL(sql)
 	if err != nil {
 		return true, err
 	}
@@ -1632,6 +1626,14 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 		}
 	}
 
+	defer func() {
+		if b, hasAfterSet := bean.(AfterSetProcessor); hasAfterSet {
+			for ii, key := range fields {
+				b.AfterSet(key, Cell(scanResults[ii].(*interface{})))
+			}
+		}
+	}()
+
 	var tempMap = make(map[string]int)
 	for ii, key := range fields {
 		var idx int
@@ -1681,12 +1683,20 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 			hasAssigned := false
 
 			switch fieldType.Kind() {
-
 			case reflect.Complex64, reflect.Complex128:
 				if rawValueType.Kind() == reflect.String {
 					hasAssigned = true
 					x := reflect.New(fieldType)
 					err := json.Unmarshal([]byte(vv.String()), x.Interface())
+					if err != nil {
+						session.Engine.LogError(err)
+						return err
+					}
+					fieldValue.Set(x.Elem())
+				} else if rawValueType.Kind() == reflect.Slice {
+					hasAssigned = true
+					x := reflect.New(fieldType)
+					err := json.Unmarshal(vv.Bytes(), x.Interface())
 					if err != nil {
 						session.Engine.LogError(err)
 						return err
@@ -1736,6 +1746,7 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 					fieldValue.SetUint(uint64(vv.Int()))
 				}
 			case reflect.Struct:
+				col := table.GetColumn(key)
 				if fieldType.ConvertibleTo(core.TimeType) {
 					if rawValueType == core.TimeType {
 						hasAssigned = true
@@ -1769,11 +1780,31 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 						session.Engine.LogError("sql.Sanner error:", err.Error())
 						hasAssigned = false
 					}
+				} else if col.SQLType.IsJson() {
+					if rawValueType.Kind() == reflect.String {
+						hasAssigned = true
+						x := reflect.New(fieldType)
+						err := json.Unmarshal([]byte(vv.String()), x.Interface())
+						if err != nil {
+							session.Engine.LogError(err)
+							return err
+						}
+						fieldValue.Set(x.Elem())
+					} else if rawValueType.Kind() == reflect.Slice {
+						hasAssigned = true
+						x := reflect.New(fieldType)
+						err := json.Unmarshal(vv.Bytes(), x.Interface())
+						if err != nil {
+							session.Engine.LogError(err)
+							return err
+						}
+						fieldValue.Set(x.Elem())
+					}
 				} else if session.Statement.UseCascade {
 					table := session.Engine.autoMapType(*fieldValue)
 					if table != nil {
-						if len(table.PrimaryKeys) > 1 {
-							panic("unsupported composited primary key cascade")
+						if len(table.PrimaryKeys) != 1 {
+							panic("unsupported non or composited primary key cascade")
 						}
 						var pk = make(core.PK, len(table.PrimaryKeys))
 
@@ -1964,7 +1995,7 @@ func (session *Session) queryPreprocess(sqlStr *string, paramStr ...interface{})
 		*sqlStr = filter.Do(*sqlStr, session.Engine.dialect, session.Statement.RefTable)
 	}
 
-	session.saveLastSQL(*sqlStr, paramStr...)
+	session.Engine.logSQL(*sqlStr, paramStr...)
 }
 
 func (session *Session) query(sqlStr string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
@@ -2958,17 +2989,31 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 			if len(fieldTable.PrimaryKeys) == 1 {
 				pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumns()[0].FieldName)
 				return pkField.Interface(), nil
-			} else {
-				return 0, fmt.Errorf("no primary key for col %v", col.Name)
 			}
-		} else {
-			// !<winxxp>! 增加支持driver.Valuer接口的结构，如sql.NullString
-			if v, ok := fieldValue.Interface().(driver.Valuer); ok {
-				return v.Value()
-			}
-
-			return 0, fmt.Errorf("Unsupported type %v", fieldValue.Type())
+			return 0, fmt.Errorf("no primary key for col %v", col.Name)
 		}
+		// !<winxxp>! 增加支持driver.Valuer接口的结构，如sql.NullString
+		if v, ok := fieldValue.Interface().(driver.Valuer); ok {
+			return v.Value()
+		}
+
+		if col.SQLType.IsText() {
+			bytes, err := json.Marshal(fieldValue.Interface())
+			if err != nil {
+				session.Engine.LogError(err)
+				return 0, err
+			}
+			return string(bytes), nil
+		} else if col.SQLType.IsBlob() {
+			bytes, err := json.Marshal(fieldValue.Interface())
+			if err != nil {
+				session.Engine.LogError(err)
+				return 0, err
+			}
+			return bytes, nil
+		}
+
+		return nil, fmt.Errorf("Unsupported type %v", fieldValue.Type())
 	case reflect.Complex64, reflect.Complex128:
 		bytes, err := json.Marshal(fieldValue.Interface())
 		if err != nil {
@@ -3002,9 +3047,8 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 				}
 			}
 			return bytes, nil
-		} else {
-			return nil, ErrUnSupportedType
 		}
+		return nil, ErrUnSupportedType
 	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
 		return int64(fieldValue.Uint()), nil
 	default:
@@ -3825,18 +3869,6 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	// --
 
 	return res.RowsAffected()
-}
-
-// saveLastSQL stores executed query information
-func (session *Session) saveLastSQL(sql string, args ...interface{}) {
-	session.lastSQL = sql
-	session.lastSQLArgs = args
-	session.Engine.logSQL(sql, args...)
-}
-
-// LastSQL returns last query information
-func (session *Session) LastSQL() (string, []interface{}) {
-	return session.lastSQL, session.lastSQLArgs
 }
 
 func (s *Session) Sync2(beans ...interface{}) error {
