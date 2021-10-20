@@ -583,8 +583,8 @@ func buildConditions(engine *Engine, table *core.Table, bean interface{},
 			t := int64(fieldValue.Uint())
 			val = reflect.ValueOf(&t).Interface()
 		case reflect.Struct:
-			if fieldType == reflect.TypeOf(time.Now()) {
-				t := fieldValue.Interface().(time.Time)
+			if fieldType.ConvertibleTo(core.TimeType) {
+				t := fieldValue.Convert(core.TimeType).Interface().(time.Time)
 				if !requiredField && (t.IsZero() || !fieldValue.IsValid()) {
 					continue
 				}
@@ -1111,9 +1111,10 @@ func (s *Statement) genDelIndexSQL() []string {
 	return sqls
 }
 
+/*
 func (s *Statement) genDropSQL() string {
-	return s.Engine.dialect.DropTableSql(s.TableName()) + ";"
-}
+	return s.Engine.dialect.MustDropTa(s.TableName()) + ";"
+}*/
 
 func (statement *Statement) genGetSql(bean interface{}) (string, []interface{}) {
 	var table *core.Table
