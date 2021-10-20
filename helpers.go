@@ -3,11 +3,12 @@ package xorm
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/caser789/go-xorm/core"
+	"github.com/go-xorm/core"
 )
 
 func indexNoCase(s, sep string) int {
@@ -38,9 +39,14 @@ func makeArray(elem string, count int) []string {
 	return res
 }
 
+func rValue(bean interface{}) reflect.Value {
+	return reflect.Indirect(reflect.ValueOf(bean))
+}
+
 func rType(bean interface{}) reflect.Type {
 	sliceValue := reflect.Indirect(reflect.ValueOf(bean))
-	return reflect.TypeOf(sliceValue.Interface())
+	//return reflect.TypeOf(sliceValue.Interface())
+	return sliceValue.Type()
 }
 
 func structName(v reflect.Type) string {
@@ -51,24 +57,20 @@ func structName(v reflect.Type) string {
 }
 
 func sliceEq(left, right []string) bool {
-	for _, l := range left {
-		var find bool
-		for _, r := range right {
-			if l == r {
-				find = true
-				break
-			}
-		}
-		if !find {
+	if len(left) != len(right) {
+		return false
+	}
+	sort.Sort(sort.StringSlice(left))
+	sort.Sort(sort.StringSlice(right))
+	for i := 0; i < len(left); i++ {
+		if left[i] != right[i] {
 			return false
 		}
 	}
-
 	return true
 }
 
 func value2Bytes(rawValue *reflect.Value) (data []byte, err error) {
-
 	aa := reflect.TypeOf((*rawValue).Interface())
 	vv := reflect.ValueOf((*rawValue).Interface())
 

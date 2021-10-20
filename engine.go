@@ -590,12 +590,32 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 					continue
 				}
 				if strings.ToUpper(tags[0]) == "EXTENDS" {
-					fieldValue = reflect.Indirect(fieldValue)
+
+					//fieldValue = reflect.Indirect(fieldValue)
+					//fmt.Println("----", fieldValue.Kind())
 					if fieldValue.Kind() == reflect.Struct {
 						//parentTable := mappingTable(fieldType, tableMapper, colMapper, dialect, tagId)
 						parentTable := engine.mapType(fieldValue)
 						for _, col := range parentTable.Columns() {
-							col.FieldName = fmt.Sprintf("%v.%v", fieldValue.Type().Name(), col.FieldName)
+							col.FieldName = fmt.Sprintf("%v.%v", t.Field(i).Name, col.FieldName)
+							//fmt.Println("---", col.FieldName)
+							table.AddColumn(col)
+						}
+
+						continue
+					} else if fieldValue.Kind() == reflect.Ptr {
+						f := fieldValue.Type().Elem()
+						if f.Kind() == reflect.Struct {
+							fieldValue = fieldValue.Elem()
+							if !fieldValue.IsValid() || fieldValue.IsNil() {
+								fieldValue = reflect.New(f).Elem()
+							}
+							//fmt.Println("00000", fieldValue)
+						}
+
+						parentTable := engine.mapType(fieldValue)
+						for _, col := range parentTable.Columns() {
+							col.FieldName = fmt.Sprintf("%v.%v", t.Field(i).Name, col.FieldName)
 							table.AddColumn(col)
 						}
 
@@ -728,7 +748,17 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 				}
 			}
 		} else {
-			sqlType := core.Type2SQLType(fieldType)
+			var sqlType core.SQLType
+			if fieldValue.CanAddr() {
+				if _, ok := fieldValue.Addr().Interface().(core.Conversion); ok {
+					sqlType = core.SQLType{core.Text, 0, 0}
+				}
+			}
+			if _, ok := fieldValue.Interface().(core.Conversion); ok {
+				sqlType = core.SQLType{core.Text, 0, 0}
+			} else {
+				sqlType = core.Type2SQLType(fieldType)
+			}
 			col = core.NewColumn(engine.ColumnMapper.Obj2Table(t.Field(i).Name),
 				t.Field(i).Name, sqlType, sqlType.DefaultLength,
 				sqlType.DefaultLength2, true)
@@ -919,7 +949,7 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 				session := engine.NewSession()
 				session.Statement.RefTable = table
 				defer session.Close()
-				isExist, err := session.isColumnExist(table.Name, col.Name)
+				isExist, err := session.isColumnExist(table.Name, col)
 				if err != nil {
 					return err
 				}
@@ -1203,7 +1233,11 @@ func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}
 	case core.Date:
 		v = engine.TZTime(t).Format("2006-01-02")
 	case core.DateTime, core.TimeStamp:
-		v = engine.TZTime(t).Format("2006-01-02 15:04:05")
+		if engine.dialect.DBType() == "ql" {
+			v = engine.TZTime(t)
+		} else {
+			v = engine.TZTime(t).Format("2006-01-02 15:04:05")
+		}
 	case core.TimeStampz:
 		if engine.dialect.DBType() == core.MSSQL {
 			v = engine.TZTime(t).Format("2006-01-02T15:04:05.9999999Z07:00")

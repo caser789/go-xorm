@@ -227,7 +227,7 @@ func (session *Session) StoreEngine(storeEngine string) *Session {
 	return session
 }
 
-// Method StoreEngine is only avialble charset dialect currently
+// Method Charset is only avialble mysql dialect currently
 func (session *Session) Charset(charset string) *Session {
 	session.Statement.Charset = charset
 	return session
@@ -1234,7 +1234,7 @@ func (session *Session) Ping() error {
 	return session.Db.Ping()
 }
 
-func (session *Session) isColumnExist(tableName, colName string) (bool, error) {
+func (session *Session) isColumnExist(tableName string, col *core.Column) (bool, error) {
 	err := session.newDb()
 	if err != nil {
 		return false, err
@@ -1243,9 +1243,10 @@ func (session *Session) isColumnExist(tableName, colName string) (bool, error) {
 	if session.IsAutoClose {
 		defer session.Close()
 	}
-	sqlStr, args := session.Engine.dialect.ColumnCheckSql(tableName, colName)
-	results, err := session.query(sqlStr, args...)
-	return len(results) > 0, err
+	return session.Engine.dialect.IsColumnExist(tableName, col)
+	//sqlStr, args := session.Engine.dialect.ColumnCheckSql(tableName, colName)
+	//results, err := session.query(sqlStr, args...)
+	//return len(results) > 0, err
 }
 
 func (session *Session) isTableExist(tableName string) (bool, error) {
@@ -1441,13 +1442,13 @@ func (session *Session) row2Bean(rows *core.Rows, fields []string, fieldsCount i
 		return err
 	}
 
-	b, hasBeforeSet := bean.(BeforeSetProcessor)
+	if b, hasBeforeSet := bean.(BeforeSetProcessor); hasBeforeSet {
+		for ii, key := range fields {
+			b.BeforeSet(key, Cell(scanResults[ii].(*interface{})))
+		}
+	}
 
 	for ii, key := range fields {
-		if hasBeforeSet {
-			b.BeforeSet(fields[ii], Cell(scanResults[ii].(*interface{})))
-		}
-
 		if fieldValue := session.getField(&dataStruct, key, table); fieldValue != nil {
 			rawValue := reflect.Indirect(reflect.ValueOf(scanResults[ii]))
 
@@ -1468,9 +1469,12 @@ func (session *Session) row2Bean(rows *core.Rows, fields []string, fieldsCount i
 				}
 			}
 
-			if structConvert, ok := fieldValue.Interface().(core.Conversion); ok {
+			if _, ok := fieldValue.Interface().(core.Conversion); ok {
 				if data, err := value2Bytes(&rawValue); err == nil {
-					structConvert.FromDB(data)
+					if fieldValue.Kind() == reflect.Ptr && fieldValue.IsNil() {
+						fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
+					}
+					fieldValue.Interface().(core.Conversion).FromDB(data)
 				} else {
 					session.Engine.LogError(err)
 				}
@@ -2054,6 +2058,10 @@ func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.T
 // convert a db data([]byte) to a field value
 func (session *Session) bytes2Value(col *core.Column, fieldValue *reflect.Value, data []byte) error {
 	if structConvert, ok := fieldValue.Addr().Interface().(core.Conversion); ok {
+		return structConvert.FromDB(data)
+	}
+
+	if structConvert, ok := fieldValue.Interface().(core.Conversion); ok {
 		return structConvert.FromDB(data)
 	}
 
@@ -2954,7 +2962,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		if session.Statement.ColumnStr == "" {
 			colNames, args = buildUpdates(session.Engine, table, bean, false, false,
 				false, false, session.Statement.allUseBool, session.Statement.useAllCols,
-				session.Statement.mustColumnMap)
+				session.Statement.mustColumnMap, true)
 		} else {
 			colNames, args, err = genCols(table, session, bean, true, true)
 			if err != nil {
@@ -3008,11 +3016,12 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 
 	if condition == "" {
 		if len(condiColNames) > 0 {
-			condition = fmt.Sprintf("%v", strings.Join(condiColNames, " AND "))
+			condition = fmt.Sprintf("%v", strings.Join(condiColNames, " "+session.Engine.Dialect().AndStr()+" "))
 		}
 	} else {
 		if len(condiColNames) > 0 {
-			condition = fmt.Sprintf("(%v) AND (%v)", condition, strings.Join(condiColNames, " AND "))
+			condition = fmt.Sprintf("(%v) %v (%v)", condition,
+				session.Engine.Dialect().AndStr(), strings.Join(condiColNames, " "+session.Engine.Dialect().AndStr()+" "))
 		}
 	}
 
@@ -3022,7 +3031,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 	var verValue *reflect.Value
 	if table.Version != "" && session.Statement.checkVersion {
 		if condition != "" {
-			condition = fmt.Sprintf("WHERE (%v) AND %v = ?", condition,
+			condition = fmt.Sprintf("WHERE (%v) %v %v = ?", condition, session.Engine.Dialect().AndStr(),
 				session.Engine.Quote(table.Version))
 		} else {
 			condition = fmt.Sprintf("WHERE %v = ?", session.Engine.Quote(table.Version))
@@ -3030,7 +3039,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		inSql, inArgs = session.Statement.genInSql()
 		if len(inSql) > 0 {
 			if condition != "" {
-				condition += " AND " + inSql
+				condition += " " + session.Engine.Dialect().AndStr() + " " + inSql
 			} else {
 				condition = "WHERE " + inSql
 			}
@@ -3056,7 +3065,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		inSql, inArgs = session.Statement.genInSql()
 		if len(inSql) > 0 {
 			if condition != "" {
-				condition += " AND " + inSql
+				condition += " " + session.Engine.Dialect().AndStr() + " " + inSql
 			} else {
 				condition = "WHERE " + inSql
 			}
@@ -3201,20 +3210,21 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 		session.Statement.mustColumnMap)
 
 	var condition = ""
+	var andStr = session.Engine.dialect.AndStr()
 
 	session.Statement.processIdParam()
 	if session.Statement.WhereStr != "" {
 		condition = session.Statement.WhereStr
 		if len(colNames) > 0 {
-			condition += " AND " + strings.Join(colNames, " AND ")
+			condition += " " + andStr + " " + strings.Join(colNames, " "+andStr+" ")
 		}
 	} else {
-		condition = strings.Join(colNames, " AND ")
+		condition = strings.Join(colNames, " "+andStr+" ")
 	}
 	inSql, inArgs := session.Statement.genInSql()
 	if len(inSql) > 0 {
 		if len(condition) > 0 {
-			condition += " AND "
+			condition += " " + andStr + " "
 		}
 		condition += inSql
 		args = append(args, inArgs...)
