@@ -66,6 +66,7 @@ type Statement struct {
 	UseCache      bool
 	UseAutoTime   bool
 	IsDistinct    bool
+	IsForUpdate   bool
 	TableAlias    string
 	allUseBool    bool
 	checkVersion  bool
@@ -102,6 +103,7 @@ func (statement *Statement) Init() {
 	statement.UseCache = true
 	statement.UseAutoTime = true
 	statement.IsDistinct = false
+	statement.IsForUpdate = false
 	statement.TableAlias = ""
 	statement.selectStr = ""
 	statement.allUseBool = false
@@ -802,6 +804,12 @@ func (statement *Statement) Distinct(columns ...string) *Statement {
 	return statement
 }
 
+// Generate "SELECT ... FOR UPDATE" statment
+func (statement *Statement) ForUpdate() *Statement {
+	statement.IsForUpdate = true
+	return statement
+}
+
 // replace select
 func (s *Statement) Select(str string) *Statement {
 	s.selectStr = str
@@ -818,6 +826,7 @@ func (statement *Statement) Cols(columns ...string) *Statement {
 	if strings.Contains(statement.ColumnStr, ".") {
 		statement.ColumnStr = strings.Replace(statement.ColumnStr, ".", statement.Engine.Quote("."), -1)
 	}
+	statement.ColumnStr = strings.Replace(statement.ColumnStr, statement.Engine.Quote("*"), "*", -1)
 	return statement
 }
 
@@ -1272,6 +1281,9 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 		if statement.Start != 0 || statement.LimitN != 0 {
 			a = fmt.Sprintf("SELECT %v FROM (SELECT %v,ROWNUM RN FROM (%v) at WHERE ROWNUM <= %d) aat WHERE RN > %d", columnStr, columnStr, a, statement.Start+statement.LimitN, statement.Start)
 		}
+	}
+	if statement.IsForUpdate {
+		a += " FOR UPDATE"
 	}
 
 	return

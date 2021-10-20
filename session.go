@@ -46,6 +46,10 @@ type Session struct {
 
 	stmtCache   map[uint32]*core.Stmt //key: hash.Hash32 of (queryStr, len(queryStr))
 	cascadeDeep int
+
+	// !evalphobia! stored the last executed query on this session
+	lastSQL     string
+	lastSQLArgs []interface{}
 }
 
 // Method Init reset the session as the init status.
@@ -63,6 +67,9 @@ func (session *Session) Init() {
 	session.afterDeleteBeans = make(map[interface{}]*[]func(interface{}), 0)
 	session.beforeClosures = make([]func(interface{}), 0)
 	session.afterClosures = make([]func(interface{}), 0)
+
+	session.lastSQL = ""
+	session.lastSQLArgs = []interface{}{}
 }
 
 // Method Close release the connection from pool
@@ -218,6 +225,12 @@ func (session *Session) Distinct(columns ...string) *Session {
 	return session
 }
 
+// Set Read/Write locking for UPDATE
+func (session *Session) ForUpdate() *Session {
+	session.Statement.IsForUpdate = true
+	return session
+}
+
 // Only not use the paramters as select or update columns
 func (session *Session) Omit(columns ...string) *Session {
 	session.Statement.Omit(columns...)
@@ -325,8 +338,7 @@ func (session *Session) Begin() error {
 		session.IsAutoCommit = false
 		session.IsCommitedOrRollbacked = false
 		session.Tx = tx
-
-		session.Engine.logSQL("BEGIN TRANSACTION")
+		session.saveLastSQL("BEGIN TRANSACTION")
 	}
 	return nil
 }
@@ -334,7 +346,7 @@ func (session *Session) Begin() error {
 // When using transaction, you can rollback if any error
 func (session *Session) Rollback() error {
 	if !session.IsAutoCommit && !session.IsCommitedOrRollbacked {
-		session.Engine.logSQL(session.Engine.dialect.RollBackStr())
+		session.saveLastSQL(session.Engine.dialect.RollBackStr())
 		session.IsCommitedOrRollbacked = true
 		return session.Tx.Rollback()
 	}
@@ -344,7 +356,7 @@ func (session *Session) Rollback() error {
 // When using transaction, Commit will commit all operations.
 func (session *Session) Commit() error {
 	if !session.IsAutoCommit && !session.IsCommitedOrRollbacked {
-		session.Engine.logSQL("COMMIT")
+		session.saveLastSQL("COMMIT")
 		session.IsCommitedOrRollbacked = true
 		var err error
 		if err = session.Tx.Commit(); err == nil {
@@ -465,7 +477,7 @@ func (session *Session) exec(sqlStr string, args ...interface{}) (sql.Result, er
 		sqlStr = filter.Do(sqlStr, session.Engine.dialect, session.Statement.RefTable)
 	}
 
-	session.Engine.logSQL(sqlStr, args...)
+	session.saveLastSQL(sqlStr, args...)
 
 	return session.Engine.LogSQLExecutionTime(sqlStr, args, func() (sql.Result, error) {
 		if session.IsAutoCommit {
@@ -608,11 +620,15 @@ func (session *Session) DropTable(beanOrTableName interface{}) error {
 	return nil
 }
 
-func (statement *Statement) JoinColumns(cols []*core.Column) string {
+func (statement *Statement) JoinColumns(cols []*core.Column, includeTableName bool) string {
 	var colnames = make([]string, len(cols))
 	for i, col := range cols {
-		colnames[i] = statement.Engine.Quote(statement.TableName()) +
-			"." + statement.Engine.Quote(col.Name)
+		if includeTableName {
+			colnames[i] = statement.Engine.Quote(statement.TableName()) +
+				"." + statement.Engine.Quote(col.Name)
+		} else {
+			colnames[i] = statement.Engine.Quote(col.Name)
+		}
 	}
 	return strings.Join(colnames, ", ")
 }
@@ -624,10 +640,13 @@ func (statement *Statement) convertIdSql(sqlStr string) string {
 			return ""
 		}
 
-		colstrs := statement.JoinColumns(cols)
+		colstrs := statement.JoinColumns(cols, false)
 		sqls := splitNNoCase(sqlStr, " from ", 2)
 		if len(sqls) != 2 {
 			return ""
+		}
+		if statement.Engine.dialect.DBType() == "ql" {
+			return fmt.Sprintf("SELECT id() FROM %v", sqls[1])
 		}
 		return fmt.Sprintf("SELECT %s FROM %v", colstrs, sqls[1])
 	}
@@ -1457,7 +1476,7 @@ func (session *Session) isTableEmpty(tableName string) (bool, error) {
 	var total int64
 	sql := fmt.Sprintf("select count(*) from %s", session.Engine.Quote(tableName))
 	err := session.DB().QueryRow(sql).Scan(&total)
-	session.Engine.logSQL(sql)
+	session.saveLastSQL(sql)
 	if err != nil {
 		return true, err
 	}
@@ -1754,7 +1773,7 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 						t := vv.Convert(core.TimeType).Interface().(time.Time)
 						z, _ := t.Zone()
 						if len(z) == 0 || t.Year() == 0 { // !nashtsai! HACK tmp work around for lib/pq doesn't properly time with location
-							session.Engine.LogDebug("empty zone key[%v] : %v | zone: %v | location: %+v\n", key, t, z, *t.Location())
+							session.Engine.LogDebugf("empty zone key[%v] : %v | zone: %v | location: %+v\n", key, t, z, *t.Location())
 							t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(),
 								t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 						}
@@ -1776,7 +1795,7 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 					// !<winxxp>! 增加支持sql.Scanner接口的结构，如sql.NullString
 					hasAssigned = true
 					if err := nulVal.Scan(vv.Interface()); err != nil {
-						fmt.Println("sql.Sanner error:", err.Error())
+						//fmt.Println("sql.Sanner error:", err.Error())
 						session.Engine.LogError("sql.Sanner error:", err.Error())
 						hasAssigned = false
 					}
@@ -1995,7 +2014,7 @@ func (session *Session) queryPreprocess(sqlStr *string, paramStr ...interface{})
 		*sqlStr = filter.Do(*sqlStr, session.Engine.dialect, session.Statement.RefTable)
 	}
 
-	session.Engine.logSQL(*sqlStr, paramStr...)
+	session.saveLastSQL(*sqlStr, paramStr...)
 }
 
 func (session *Session) query(sqlStr string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
@@ -2985,16 +3004,20 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 			return tf, nil
 		}
 
-		if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
-			if len(fieldTable.PrimaryKeys) == 1 {
-				pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumns()[0].FieldName)
-				return pkField.Interface(), nil
+		if !col.SQLType.IsJson() {
+			// !<winxxp>! 增加支持driver.Valuer接口的结构，如sql.NullString
+			if v, ok := fieldValue.Interface().(driver.Valuer); ok {
+				return v.Value()
 			}
-			return 0, fmt.Errorf("no primary key for col %v", col.Name)
-		}
-		// !<winxxp>! 增加支持driver.Valuer接口的结构，如sql.NullString
-		if v, ok := fieldValue.Interface().(driver.Valuer); ok {
-			return v.Value()
+
+			fieldTable := session.Engine.autoMapType(fieldValue)
+			//if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
+				if len(fieldTable.PrimaryKeys) == 1 {
+					pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumns()[0].FieldName)
+					return pkField.Interface(), nil
+				}
+				return 0, fmt.Errorf("no primary key for col %v", col.Name)
+			//}
 		}
 
 		if col.SQLType.IsText() {
@@ -3195,6 +3218,64 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 		aiValue.Set(reflect.ValueOf(v))
 
 		return res.RowsAffected()
+	} else if session.Engine.DriverName() == core.ORACLE {
+		//assert table.AutoIncrement != ""
+		res, err := session.query("select seq_atable.currval from dual", args...)
+
+		if err != nil {
+			return 0, err
+		} else {
+			handleAfterInsertProcessorFunc(bean)
+		}
+
+		if cacher := session.Engine.getCacher2(table); cacher != nil && session.Statement.UseCache {
+			session.cacheInsert(session.Statement.TableName())
+		}
+
+		if table.Version != "" && session.Statement.checkVersion {
+			verValue, err := table.VersionColumn().ValueOf(bean)
+			if err != nil {
+				session.Engine.LogError(err)
+			} else if verValue.IsValid() && verValue.CanSet() {
+				verValue.SetInt(1)
+			}
+		}
+
+		if len(res) < 1 {
+			return 0, errors.New("insert no error but not returned id")
+		}
+
+		idByte := res[0][table.AutoIncrement]
+		id, err := strconv.ParseInt(string(idByte), 10, 64)
+		if err != nil {
+			return 1, err
+		}
+
+		aiValue, err := table.AutoIncrColumn().ValueOf(bean)
+		if err != nil {
+			session.Engine.LogError(err)
+		}
+
+		if aiValue == nil || !aiValue.IsValid() /*|| aiValue. != 0*/ || !aiValue.CanSet() {
+			return 1, nil
+		}
+
+		var v interface{} = id
+		switch aiValue.Type().Kind() {
+		case reflect.Int32:
+			v = int32(id)
+		case reflect.Int:
+			v = int(id)
+		case reflect.Uint32:
+			v = uint32(id)
+		case reflect.Uint64:
+			v = uint64(id)
+		case reflect.Uint:
+			v = uint(id)
+		}
+		aiValue.Set(reflect.ValueOf(v))
+
+		return 1, nil
 	} else {
 		//assert table.AutoIncrement != ""
 		sqlStr = sqlStr + " RETURNING " + session.Engine.Quote(table.AutoIncrement)
@@ -3274,7 +3355,7 @@ func (statement *Statement) convertUpdateSql(sqlStr string) (string, string) {
 		return "", ""
 	}
 
-	colstrs := statement.JoinColumns(statement.RefTable.PKColumns())
+	colstrs := statement.JoinColumns(statement.RefTable.PKColumns(), true)
 	sqls := splitNNoCase(sqlStr, "where", 2)
 	if len(sqls) != 2 {
 		if len(sqls) == 1 {
@@ -3869,6 +3950,18 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	// --
 
 	return res.RowsAffected()
+}
+
+// saveLastSQL stores executed query information
+func (session *Session) saveLastSQL(sql string, args ...interface{}) {
+	session.lastSQL = sql
+	session.lastSQLArgs = args
+	session.Engine.logSQL(sql, args...)
+}
+
+// LastSQL returns last query information
+func (session *Session) LastSQL() (string, []interface{}) {
+	return session.lastSQL, session.lastSQLArgs
 }
 
 func (s *Session) Sync2(beans ...interface{}) error {
