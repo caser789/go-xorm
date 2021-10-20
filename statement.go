@@ -160,9 +160,6 @@ func (statement *Statement) Table(tableNameOrBean interface{}) *Statement {
 	t := v.Type()
 	if t.Kind() == reflect.String {
 		statement.AltTableName = tableNameOrBean.(string)
-		if statement.AltTableName[0] == '~' {
-			statement.AltTableName = statement.Engine.TableMapper.TableName(statement.AltTableName[1:])
-		}
 	} else if t.Kind() == reflect.Struct {
 		statement.RefTable = statement.Engine.autoMapType(v)
 	}
@@ -592,6 +589,8 @@ func buildConditions(engine *Engine, table *core.Table, bean interface{},
 					continue
 				}
 				val = engine.FormatTime(col.SQLType.Name, t)
+			} else if _, ok := reflect.New(fieldType).Interface().(core.Conversion); ok {
+				continue
 			} else {
 				engine.autoMapType(fieldValue)
 				if table, ok := engine.Tables[fieldValue.Type()]; ok {
@@ -960,15 +959,9 @@ func (statement *Statement) Join(join_operator string, tablename interface{}, co
 		l := len(t)
 		if l > 1 {
 			table := t[0]
-			if table[0] == '~' {
-				table = statement.Engine.TableMapper.TableName(table[1:])
-			}
 			joinTable = statement.Engine.Quote(table) + " AS " + statement.Engine.Quote(t[1])
 		} else if l == 1 {
 			table := t[0]
-			if table[0] == '~' {
-				table = statement.Engine.TableMapper.TableName(table[1:])
-			}
 			joinTable = statement.Engine.Quote(table)
 		}
 	case []interface{}:
@@ -981,9 +974,6 @@ func (statement *Statement) Join(join_operator string, tablename interface{}, co
 			t := v.Type()
 			if t.Kind() == reflect.String {
 				table = f.(string)
-				if table[0] == '~' {
-					table = statement.Engine.TableMapper.TableName(table[1:])
-				}
 			} else if t.Kind() == reflect.Struct {
 				r := statement.Engine.autoMapType(v)
 				table = r.Name
@@ -996,9 +986,6 @@ func (statement *Statement) Join(join_operator string, tablename interface{}, co
 		}
 	default:
 		t := fmt.Sprintf("%v", tablename)
-		if t[0] == '~' {
-			t = statement.Engine.TableMapper.TableName(t[1:])
-		}
 		joinTable = statement.Engine.Quote(t)
 	}
 	if statement.JoinStr != "" {
@@ -1205,7 +1192,7 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 		if columnStr == "" {
 			columnStr = statement.Engine.Quote(strings.Replace(statement.GroupByStr, ",", statement.Engine.Quote(","), -1))
 		}
-		statement.GroupByStr = columnStr
+		//statement.GroupByStr = columnStr
 	}
 	var distinct string
 	if statement.IsDistinct {

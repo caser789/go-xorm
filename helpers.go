@@ -11,6 +11,43 @@ import (
 	"github.com/go-xorm/core"
 )
 
+func isZero(k interface{}) bool {
+	switch k.(type) {
+	case int:
+		return k.(int) == 0
+	case int8:
+		return k.(int8) == 0
+	case int16:
+		return k.(int16) == 0
+	case int32:
+		return k.(int32) == 0
+	case int64:
+		return k.(int64) == 0
+	case uint:
+		return k.(uint) == 0
+	case uint8:
+		return k.(uint8) == 0
+	case uint16:
+		return k.(uint16) == 0
+	case uint32:
+		return k.(uint32) == 0
+	case uint64:
+		return k.(uint64) == 0
+	case string:
+		return k.(string) == ""
+	}
+	return false
+}
+
+func isPKZero(pk core.PK) bool {
+	for _, k := range pk {
+		if isZero(k) {
+			return true
+		}
+	}
+	return false
+}
+
 func indexNoCase(s, sep string) int {
 	return strings.Index(strings.ToLower(s), strings.ToLower(sep))
 }
@@ -299,10 +336,21 @@ func genCols(table *core.Table, session *Session, bean interface{}, useCol bool,
 		}
 
 		if (col.IsCreated || col.IsUpdated) && session.Statement.UseAutoTime {
-			args = append(args, session.Engine.NowTime(col.SQLType.Name))
+			val, t := session.Engine.NowTime2(col.SQLType.Name)
+			args = append(args, val)
+			session.afterClosures = append(session.afterClosures, func(bean interface{}) {
+				v, _ := col.ValueOf(bean)
+				switch v.Type().Kind() {
+				case reflect.Struct:
+					v.Set(reflect.ValueOf(t))
+				case reflect.Int, reflect.Int64, reflect.Int32:
+					v.SetInt(t.Unix())
+				case reflect.Uint, reflect.Uint64, reflect.Uint32:
+					v.SetUint(uint64(t.Unix()))
+				}
+			})
 		} else if col.IsVersion && session.Statement.checkVersion {
 			args = append(args, 1)
-			//} else if !col.DefaultIsEmpty {
 		} else {
 			arg, err := session.value2Interface(col, fieldValue)
 			if err != nil {

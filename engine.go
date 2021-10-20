@@ -352,6 +352,9 @@ func (engine *Engine) DBMetas() ([]*core.Table, error) {
 	return tables, nil
 }
 
+/*
+dump database all table structs and data to a file
+*/
 func (engine *Engine) DumpAllToFile(fp string) error {
 	f, err := os.Create(fp)
 	if err != nil {
@@ -361,6 +364,9 @@ func (engine *Engine) DumpAllToFile(fp string) error {
 	return engine.DumpAll(f)
 }
 
+/*
+dump database all table structs and data to w
+*/
 func (engine *Engine) DumpAll(w io.Writer) error {
 	tables, err := engine.DBMetas()
 	if err != nil {
@@ -773,7 +779,12 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 						col.IsPrimaryKey = true
 						col.Nullable = false
 					case k == "NULL":
-						col.Nullable = (strings.ToUpper(tags[j-1]) != "NOT")
+						if j == 0 {
+							col.Nullable = true
+						} else {
+							col.Nullable = (strings.ToUpper(tags[j-1]) != "NOT")
+						}
+					// TODO: for postgres how add autoincr?
 					/*case strings.HasPrefix(k, "AUTOINCR(") && strings.HasSuffix(k, ")"):
 					col.IsAutoIncrement = true
 
@@ -979,8 +990,12 @@ func (engine *Engine) IsTableExist(beanOrTableName interface{}) (bool, error) {
 }
 
 func (engine *Engine) IdOf(bean interface{}) core.PK {
-	table := engine.TableInfo(bean)
-	v := reflect.Indirect(reflect.ValueOf(bean))
+	return engine.IdOfV(reflect.ValueOf(bean))
+}
+
+func (engine *Engine) IdOfV(rv reflect.Value) core.PK {
+	v := reflect.Indirect(rv)
+	table := engine.autoMapType(v)
 	pk := make([]interface{}, len(table.PrimaryKeys))
 	for i, col := range table.PKColumns() {
 		pkField := v.FieldByName(col.FieldName)
@@ -1390,6 +1405,11 @@ func (engine *Engine) NowTime(sqlTypeName string) interface{} {
 	return engine.FormatTime(sqlTypeName, t)
 }
 
+func (engine *Engine) NowTime2(sqlTypeName string) (interface{}, time.Time) {
+	t := time.Now()
+	return engine.FormatTime(sqlTypeName, t), t
+}
+
 func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}) {
 	switch sqlTypeName {
 	case core.Time:
@@ -1413,6 +1433,8 @@ func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}
 		} else {
 			v = engine.TZTime(t).Format(time.RFC3339Nano)
 		}
+	case core.BigInt, core.Int:
+		v = engine.TZTime(t).Unix()
 	default:
 		v = engine.TZTime(t)
 	}
