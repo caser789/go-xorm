@@ -216,6 +216,8 @@ func (db *mysql) SqlType(c *core.Column) string {
 		}
 		res += strings.TrimLeft(opts, ",")
 		res += ")"
+	case core.NVarchar:
+		res = core.Varchar
 	default:
 		res = t
 	}
@@ -418,6 +420,7 @@ func (db *mysql) GetTables() ([]*core.Table, error) {
 		}
 
 		table.Name = name
+		table.StoreEngine = engine
 		tables = append(tables, table)
 	}
 	return tables, nil

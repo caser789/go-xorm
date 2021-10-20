@@ -877,7 +877,7 @@ func (statement *Statement) OrderBy(order string) *Statement {
 	if statement.OrderStr != "" {
 		statement.OrderStr += ", "
 	}
-	statement.OrderStr = order
+	statement.OrderStr += order
 	return statement
 }
 
@@ -905,9 +905,11 @@ func (statement *Statement) Asc(colNames ...string) *Statement {
 //The join_operator should be one of INNER, LEFT OUTER, CROSS etc - this will be prepended to JOIN
 func (statement *Statement) Join(join_operator, tablename, condition string) *Statement {
 	if statement.JoinStr != "" {
-		statement.JoinStr = statement.JoinStr + fmt.Sprintf(" %v JOIN %v ON %v", join_operator, tablename, condition)
+		statement.JoinStr = statement.JoinStr + fmt.Sprintf(" %v JOIN %v ON %v", join_operator,
+			statement.Engine.Quote(tablename), condition)
 	} else {
-		statement.JoinStr = fmt.Sprintf("%v JOIN %v ON %v", join_operator, tablename, condition)
+		statement.JoinStr = fmt.Sprintf("%v JOIN %v ON %v", join_operator,
+			statement.Engine.Quote(tablename), condition)
 	}
 	return statement
 }
@@ -1100,10 +1102,10 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 
 	var top string
 	var mssqlCondi string
-	var orderBy string
+	/*var orderBy string
 	if statement.OrderStr != "" {
 		orderBy = fmt.Sprintf(" ORDER BY %v", statement.OrderStr)
-	}
+	}*/
 	statement.processIdParam()
 	var whereStr string
 	if statement.WhereStr != "" {
@@ -1137,8 +1139,8 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 					column = statement.RefTable.ColumnsSeq()[0]
 				}
 			}
-			mssqlCondi = fmt.Sprintf("(%s NOT IN (SELECT TOP %d %s%s%s%s))",
-				column, statement.Start, column, fromStr, whereStr, orderBy)
+			mssqlCondi = fmt.Sprintf("(%s NOT IN (SELECT TOP %d %s%s%s))",
+				column, statement.Start, column, fromStr, whereStr)
 		}
 	}
 
