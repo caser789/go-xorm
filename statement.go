@@ -89,6 +89,7 @@ func (statement *Statement) Init() {
 	statement.IsDistinct = false
 	statement.allUseBool = false
 	statement.mustColumnMap = make(map[string]bool)
+	statement.useAllCols = false
 	statement.checkVersion = true
 	statement.inColumns = make(map[string]*inParam)
 	statement.incrColumns = make(map[string]incrParam)
