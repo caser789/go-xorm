@@ -1,6 +1,5 @@
+// +build !windows,!nacl,!plan9
 package xorm
-
-// +build !windows !nacl !plan9
 
 import (
 	"fmt"

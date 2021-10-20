@@ -38,7 +38,7 @@ type Engine struct {
 	ShowErr   bool
 	ShowDebug bool
 	ShowWarn  bool
-	// --
+	// --227
 
 	Logger     core.ILogger
 	TZLocation *time.Location
@@ -177,6 +177,7 @@ func (engine *Engine) Ping() error {
 // logging sql
 func (engine *Engine) logSQL(sqlStr string, sqlArgs ...interface{}) {
 	if engine.ShowSQL {
+		engine.overrideLogLevel(core.LOG_INFO)
 		if len(sqlArgs) > 0 {
 			engine.Logger.Info(fmt.Sprintf("[sql] %v [args] %v", sqlStr, sqlArgs))
 		} else {
@@ -186,27 +187,41 @@ func (engine *Engine) logSQL(sqlStr string, sqlArgs ...interface{}) {
 }
 
 // logging error
+func (engine *Engine) overrideLogLevel(overrideLevel core.LogLevel) {
+	logLevel := engine.Logger.Level()
+	if logLevel == core.LOG_UNKNOWN {
+		// intend to left empty
+	} else if logLevel < overrideLevel { // TODO can remove if deprecated engine.ShowErr
+		engine.Logger.SetLevel(core.LOG_ERR) // try override logger's log level
+	}
+
+}
+
 func (engine *Engine) LogError(contents ...interface{}) {
 	if engine.ShowErr {
+		engine.overrideLogLevel(core.LOG_ERR)
 		engine.Logger.Err(contents...)
 	}
 }
 
 func (engine *Engine) LogErrorf(format string, contents ...interface{}) {
 	if engine.ShowErr {
-		engine.Logger.Err(fmt.Sprintf(format, contents...))
+		engine.overrideLogLevel(core.LOG_ERR)
+		engine.Logger.Errf(format, contents...)
 	}
 }
 
 // logging info
 func (engine *Engine) LogInfo(contents ...interface{}) {
 	if engine.ShowInfo {
+		engine.overrideLogLevel(core.LOG_INFO)
 		engine.Logger.Info(contents...)
 	}
 }
 
 func (engine *Engine) LogInfof(format string, contents ...interface{}) {
 	if engine.ShowErr {
+		engine.overrideLogLevel(core.LOG_INFO)
 		engine.Logger.Infof(format, contents...)
 	}
 }
@@ -214,12 +229,14 @@ func (engine *Engine) LogInfof(format string, contents ...interface{}) {
 // logging debug
 func (engine *Engine) LogDebug(contents ...interface{}) {
 	if engine.ShowDebug {
+		engine.overrideLogLevel(core.LOG_DEBUG)
 		engine.Logger.Debug(contents...)
 	}
 }
 
 func (engine *Engine) LogDebugf(format string, contents ...interface{}) {
 	if engine.ShowDebug {
+		engine.overrideLogLevel(core.LOG_DEBUG)
 		engine.Logger.Debugf(format, contents...)
 	}
 }
@@ -227,12 +244,14 @@ func (engine *Engine) LogDebugf(format string, contents ...interface{}) {
 // logging warn
 func (engine *Engine) LogWarn(contents ...interface{}) {
 	if engine.ShowWarn {
+		engine.overrideLogLevel(core.LOG_WARNING)
 		engine.Logger.Warning(contents...)
 	}
 }
 
 func (engine *Engine) LogWarnf(format string, contents ...interface{}) {
 	if engine.ShowWarn {
+		engine.overrideLogLevel(core.LOG_WARNING)
 		engine.Logger.Warningf(format, contents...)
 	}
 }
@@ -1097,19 +1116,22 @@ func (engine *Engine) Sync2(beans ...interface{}) error {
 				}
 
 				if oriCol != nil {
-					if col.SQLType.Name != oriCol.SQLType.Name {
-						if col.SQLType.Name == core.Text &&
-							oriCol.SQLType.Name == core.Varchar {
+					expectedType := engine.dialect.SqlType(col)
+					//curType := oriCol.SQLType.Name
+					curType := engine.dialect.SqlType(oriCol)
+					if expectedType != curType {
+						if expectedType == core.Text &&
+							curType == core.Varchar {
 							// currently only support mysql
 							if engine.dialect.DBType() == core.MYSQL {
 								_, err = engine.Exec(engine.dialect.ModifyColumnSql(table.Name, col))
 							} else {
 								engine.LogWarnf("Table %s Column %s db type is %s, struct type is %s\n",
-									table.Name, col.Name, oriCol.SQLType.Name, col.SQLType.Name)
+									table.Name, col.Name, curType, expectedType)
 							}
 						} else {
 							engine.LogWarnf("Table %s Column %s db type is %s, struct type is %s",
-								table.Name, col.Name, oriCol.SQLType.Name, col.SQLType.Name)
+								table.Name, col.Name, curType, expectedType)
 						}
 					}
 					if col.Default != oriCol.Default {

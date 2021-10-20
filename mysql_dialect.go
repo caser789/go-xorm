@@ -56,24 +56,20 @@ func (db *mysql) SqlType(c *core.Column) string {
 	case core.Enum: //mysql enum
 		res = core.Enum
 		res += "("
-		for v, k := range c.EnumOptions {
-			if k > 0 {
-				res += fmt.Sprintf(",'%v'", v)
-			} else {
-				res += fmt.Sprintf("'%v'", v)
-			}
+		opts := ""
+		for v, _ := range c.EnumOptions {
+			opts += fmt.Sprintf(",'%v'", v)
 		}
+		res += strings.TrimLeft(opts, ",")
 		res += ")"
 	case core.Set: //mysql set
 		res = core.Set
 		res += "("
-		for v, k := range c.SetOptions {
-			if k > 0 {
-				res += fmt.Sprintf(",'%v'", v)
-			} else {
-				res += fmt.Sprintf("'%v'", v)
-			}
+		opts := ""
+		for v, _ := range c.SetOptions {
+			opts += fmt.Sprintf(",'%v'", v)
 		}
+		res += strings.TrimLeft(opts, ",")
 		res += ")"
 	default:
 		res = t
@@ -81,6 +77,11 @@ func (db *mysql) SqlType(c *core.Column) string {
 
 	var hasLen1 bool = (c.Length > 0)
 	var hasLen2 bool = (c.Length2 > 0)
+
+	if res == core.BigInt && !hasLen1 && !hasLen2 {
+		c.Length = 20
+		hasLen1 = true
+	}
 
 	if hasLen2 {
 		res += "(" + strconv.Itoa(c.Length) + "," + strconv.Itoa(c.Length2) + ")"
