@@ -26,6 +26,11 @@ type decrParam struct {
 	arg     interface{}
 }
 
+type exprParam struct {
+	colName string
+	expr    string
+}
+
 // statement save all the sql info for executing SQL
 type Statement struct {
 	RefTable      *core.Table
@@ -63,6 +68,7 @@ type Statement struct {
 	inColumns     map[string]*inParam
 	incrColumns   map[string]incrParam
 	decrColumns   map[string]decrParam
+	exprColumns   map[string]exprParam
 }
 
 // init
@@ -98,6 +104,7 @@ func (statement *Statement) Init() {
 	statement.inColumns = make(map[string]*inParam)
 	statement.incrColumns = make(map[string]incrParam)
 	statement.decrColumns = make(map[string]decrParam)
+	statement.exprColumns = make(map[string]exprParam)
 }
 
 // add the raw sql statement
@@ -507,7 +514,7 @@ func buildConditions(engine *Engine, table *core.Table, bean interface{},
 		}
 
 		if col.IsDeleted && !unscoped { // tag "deleted" is enabled
-			colNames = append(colNames, fmt.Sprintf("(%v IS NULL or %v = '0001-01-01 00:00:00') ", engine.Quote(col.Name), engine.Quote(col.Name)))
+			colNames = append(colNames, fmt.Sprintf("(%v IS NULL or %v = '0001-01-01 00:00:00')", engine.Quote(col.Name), engine.Quote(col.Name)))
 		}
 
 		fieldValue := *fieldValuePtr
@@ -716,6 +723,13 @@ func (statement *Statement) Decr(column string, arg ...interface{}) *Statement {
 	return statement
 }
 
+// Generate  "Update ... Set column = {expression}" statment
+func (statement *Statement) Expr(column string, expression string) *Statement {
+	k := strings.ToLower(column)
+	statement.exprColumns[k] = exprParam{column, expression}
+	return statement
+}
+
 // Generate  "Update ... Set column = column + arg" statment
 func (statement *Statement) getInc() map[string]incrParam {
 	return statement.incrColumns
@@ -724,6 +738,11 @@ func (statement *Statement) getInc() map[string]incrParam {
 // Generate  "Update ... Set column = column - arg" statment
 func (statement *Statement) getDec() map[string]decrParam {
 	return statement.decrColumns
+}
+
+// Generate  "Update ... Set column = {expression}" statment
+func (statement *Statement) getExpr() map[string]exprParam {
+	return statement.exprColumns
 }
 
 // Generate "Where column IN (?) " statment
@@ -1183,7 +1202,9 @@ func (statement *Statement) genCountSql(bean interface{}) (string, []interface{}
 
 func (statement *Statement) genSelectSql(columnStr string) (a string) {
 	if statement.GroupByStr != "" {
-		columnStr = statement.Engine.Quote(strings.Replace(statement.GroupByStr, ",", statement.Engine.Quote(","), -1))
+		if columnStr == "" {
+			columnStr = statement.Engine.Quote(strings.Replace(statement.GroupByStr, ",", statement.Engine.Quote(","), -1))
+		}
 		statement.GroupByStr = columnStr
 	}
 	var distinct string
@@ -1233,8 +1254,16 @@ func (statement *Statement) genSelectSql(columnStr string) (a string) {
 					column = statement.RefTable.ColumnsSeq()[0]
 				}
 			}
-			mssqlCondi = fmt.Sprintf("(%s NOT IN (SELECT TOP %d %s%s%s))",
-				column, statement.Start, column, fromStr, whereStr)
+			var orderStr string
+			if len(statement.OrderStr) > 0 {
+				orderStr = " ORDER BY " + statement.OrderStr
+			}
+			var groupStr string
+			if len(statement.GroupByStr) > 0 {
+				groupStr = " GROUP BY " + statement.GroupByStr
+			}
+			mssqlCondi = fmt.Sprintf("(%s NOT IN (SELECT TOP %d %s%s%s%s%s))",
+				column, statement.Start, column, fromStr, whereStr, orderStr, groupStr)
 		}
 	}
 

@@ -47,6 +47,11 @@ type Engine struct {
 	disableGlobalCache bool
 }
 
+func (engine *Engine) SetLogger(logger core.ILogger) {
+	engine.Logger = logger
+	engine.dialect.SetLogger(logger)
+}
+
 func (engine *Engine) SetDisableGlobalCache(disable bool) {
 	if engine.disableGlobalCache != disable {
 		engine.disableGlobalCache = disable
@@ -188,9 +193,9 @@ func (engine *Engine) logSQL(sqlStr string, sqlArgs ...interface{}) {
 	if engine.ShowSQL {
 		engine.overrideLogLevel(core.LOG_INFO)
 		if len(sqlArgs) > 0 {
-			engine.Logger.Info(fmt.Sprintf("[sql] %v [args] %v", sqlStr, sqlArgs))
+			engine.Logger.Infof("[sql] %v [args] %v", sqlStr, sqlArgs)
 		} else {
-			engine.Logger.Info(fmt.Sprintf("[sql] %v", sqlStr))
+			engine.Logger.Infof("[sql] %v", sqlStr)
 		}
 	}
 }
@@ -200,7 +205,7 @@ func (engine *Engine) LogSQLQueryTime(sqlStr string, args interface{}, execution
 		b4ExecTime := time.Now()
 		stmt, res, err := executionBlock()
 		execDuration := time.Since(b4ExecTime)
-		engine.LogDebugf("sql [%s] - args [%v] - query took: %vns", sqlStr, args, execDuration.Nanoseconds())
+		engine.LogDebugf("[time] %s - args %v - query took: %vns", sqlStr, args, execDuration.Nanoseconds())
 		return stmt, res, err
 	} else {
 		return executionBlock()
@@ -212,7 +217,7 @@ func (engine *Engine) LogSQLExecutionTime(sqlStr string, args interface{}, execu
 		b4ExecTime := time.Now()
 		res, err := executionBlock()
 		execDuration := time.Since(b4ExecTime)
-		engine.LogDebugf("sql [%s] - args [%v] - execution took: %vns", sqlStr, args, execDuration.Nanoseconds())
+		engine.LogDebugf("[time] %s - args %v - execution took: %vns", sqlStr, args, execDuration.Nanoseconds())
 		return res, err
 	} else {
 		return executionBlock()
@@ -551,6 +556,13 @@ func (engine *Engine) Decr(column string, arg ...interface{}) *Session {
 	session := engine.NewSession()
 	session.IsAutoClose = true
 	return session.Decr(column, arg...)
+}
+
+// Method Expr provides a update string like "column = {expression}"
+func (engine *Engine) Expr(column string, expression string) *Session {
+	session := engine.NewSession()
+	session.IsAutoClose = true
+	return session.Expr(column, expression)
 }
 
 // Temporarily change the Get, Find, Update's table
@@ -1251,13 +1263,6 @@ func (engine *Engine) Query(sql string, paramStr ...interface{}) (resultsSlice [
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Query(sql, paramStr...)
-}
-
-// Exec a raw sql and return records as []map[string]string
-func (engine *Engine) Q(sql string, paramStr ...interface{}) (resultsSlice []map[string]string, err error) {
-	session := engine.NewSession()
-	defer session.Close()
-	return session.Q(sql, paramStr...)
 }
 
 // Insert one or more records
