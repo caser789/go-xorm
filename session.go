@@ -3161,64 +3161,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 
 	// for postgres, many of them didn't implement lastInsertId, so we should
 	// implemented it ourself.
-
-	if session.Engine.DriverName() != core.POSTGRES || table.AutoIncrement == "" {
-		res, err := session.exec(sqlStr, args...)
-		if err != nil {
-			return 0, err
-		} else {
-			handleAfterInsertProcessorFunc(bean)
-		}
-
-		if cacher := session.Engine.getCacher2(table); cacher != nil && session.Statement.UseCache {
-			session.cacheInsert(session.Statement.TableName())
-		}
-
-		if table.Version != "" && session.Statement.checkVersion {
-			verValue, err := table.VersionColumn().ValueOf(bean)
-			if err != nil {
-				session.Engine.LogError(err)
-			} else if verValue.IsValid() && verValue.CanSet() {
-				verValue.SetInt(1)
-			}
-		}
-
-		if table.AutoIncrement == "" {
-			return res.RowsAffected()
-		}
-
-		var id int64 = 0
-		id, err = res.LastInsertId()
-		if err != nil || id <= 0 {
-			return res.RowsAffected()
-		}
-
-		aiValue, err := table.AutoIncrColumn().ValueOf(bean)
-		if err != nil {
-			session.Engine.LogError(err)
-		}
-
-		if aiValue == nil || !aiValue.IsValid() /*|| aiValue.Int() != 0*/ || !aiValue.CanSet() {
-			return res.RowsAffected()
-		}
-
-		var v interface{} = id
-		switch aiValue.Type().Kind() {
-		case reflect.Int32:
-			v = int32(id)
-		case reflect.Int:
-			v = int(id)
-		case reflect.Uint32:
-			v = uint32(id)
-		case reflect.Uint64:
-			v = uint64(id)
-		case reflect.Uint:
-			v = uint(id)
-		}
-		aiValue.Set(reflect.ValueOf(v))
-
-		return res.RowsAffected()
-	} else if session.Engine.DriverName() == core.ORACLE {
+	if session.Engine.dialect.DBType() == core.ORACLE && len(table.AutoIncrement) > 0 {
 		//assert table.AutoIncrement != ""
 		res, err := session.query("select seq_atable.currval from dual", args...)
 
@@ -3276,7 +3219,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 		aiValue.Set(reflect.ValueOf(v))
 
 		return 1, nil
-	} else {
+	} else if session.Engine.dialect.DBType() == core.POSTGRES && len(table.AutoIncrement) > 0 {
 		//assert table.AutoIncrement != ""
 		sqlStr = sqlStr + " RETURNING " + session.Engine.Quote(table.AutoIncrement)
 		res, err := session.query(sqlStr, args...)
@@ -3335,6 +3278,62 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 		aiValue.Set(reflect.ValueOf(v))
 
 		return 1, nil
+	} else {
+		res, err := session.exec(sqlStr, args...)
+		if err != nil {
+			return 0, err
+		} else {
+			handleAfterInsertProcessorFunc(bean)
+		}
+
+		if cacher := session.Engine.getCacher2(table); cacher != nil && session.Statement.UseCache {
+			session.cacheInsert(session.Statement.TableName())
+		}
+
+		if table.Version != "" && session.Statement.checkVersion {
+			verValue, err := table.VersionColumn().ValueOf(bean)
+			if err != nil {
+				session.Engine.LogError(err)
+			} else if verValue.IsValid() && verValue.CanSet() {
+				verValue.SetInt(1)
+			}
+		}
+
+		if table.AutoIncrement == "" {
+			return res.RowsAffected()
+		}
+
+		var id int64 = 0
+		id, err = res.LastInsertId()
+		if err != nil || id <= 0 {
+			return res.RowsAffected()
+		}
+
+		aiValue, err := table.AutoIncrColumn().ValueOf(bean)
+		if err != nil {
+			session.Engine.LogError(err)
+		}
+
+		if aiValue == nil || !aiValue.IsValid() /*|| aiValue.Int() != 0*/ || !aiValue.CanSet() {
+			return res.RowsAffected()
+		}
+
+		var v interface{} = id
+		switch aiValue.Type().Kind() {
+		case reflect.Int32:
+			v = int32(id)
+		case reflect.Int:
+			v = int(id)
+		case reflect.Uint32:
+			v = uint32(id)
+		case reflect.Uint64:
+			v = uint64(id)
+		case reflect.Uint:
+			v = uint(id)
+		}
+		aiValue.Set(reflect.ValueOf(v))
+
+		return res.RowsAffected()
 	}
 }
 
@@ -3566,7 +3565,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 			colNames, args = buildUpdates(session.Engine, table, bean, false, false,
 				false, false, session.Statement.allUseBool, session.Statement.useAllCols,
 				session.Statement.mustColumnMap, session.Statement.nullableMap,
-				session.Statement.columnMap, true)
+				session.Statement.columnMap, true, session.Statement.unscoped)
 		} else {
 			colNames, args, err = genCols(table, session, bean, true, true)
 			if err != nil {
