@@ -219,12 +219,7 @@ func (session *Session) OrderBy(order string) *Session {
 
 // Method Desc provide desc order by query condition, the input parameters are columns.
 func (session *Session) Desc(colNames ...string) *Session {
-	if session.Statement.OrderStr != "" {
-		session.Statement.OrderStr += ", "
-	}
-	newColNames := col2NewCols(colNames...)
-	sqlStr := strings.Join(newColNames, session.Engine.Quote(" DESC, "))
-	session.Statement.OrderStr += session.Engine.Quote(sqlStr) + " DESC"
+	session.Statement.Desc(colNames...)
 	return session
 }
 
@@ -452,12 +447,10 @@ func (session *Session) exec(sqlStr string, args ...interface{}) (sql.Result, er
 
 	session.Engine.logSQL(sqlStr, args...)
 
-	return session.Engine.LogSQLExecutionTime(sqlStr, args, func() (sql.Result, error) {
-		if session.IsAutoCommit {
-			return session.innerExec(sqlStr, args...)
-		}
-		return session.Tx.Exec(sqlStr, args...)
-	})
+	if session.IsAutoCommit {
+		return session.innerExec(sqlStr, args...)
+	}
+	return session.Tx.Exec(sqlStr, args...)
 }
 
 // Exec raw sql
@@ -850,8 +843,9 @@ func (session *Session) cacheFind(t reflect.Type, sqlStr string, rowsSlicePtr in
 	for j := 0; j < len(temps); j++ {
 		bean := temps[j]
 		if bean == nil {
-			session.Engine.LogError("[xorm:cacheFind] cache error:", tableName, ides[j], bean)
-			return errors.New("cache error")
+			session.Engine.LogWarn("[xorm:cacheFind] cache no hit:", tableName, ides[j])
+			// return errors.New("cache error") // !nashtsai! no need to return error, but continue instead
+			continue
 		}
 		if sliceValue.Kind() == reflect.Slice {
 			if t.Kind() == reflect.Ptr {
@@ -1771,16 +1765,15 @@ func (session *Session) queryPreprocess(sqlStr *string, paramStr ...interface{})
 }
 
 func (session *Session) query(sqlStr string, paramStr ...interface{}) (resultsSlice []map[string][]byte, err error) {
-
 	session.queryPreprocess(&sqlStr, paramStr...)
 
 	if session.IsAutoCommit {
-		return session.innerQuery(session.Db, sqlStr, paramStr...)
+		return query(session.Db, sqlStr, paramStr...)
 	}
-	return session.txQuery(session.Tx, sqlStr, paramStr...)
+	return txQuery(session.Tx, sqlStr, paramStr...)
 }
 
-func (session *Session) txQuery(tx *core.Tx, sqlStr string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
+func txQuery(tx *core.Tx, sqlStr string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
 	rows, err := tx.Query(sqlStr, params...)
 	if err != nil {
 		return nil, err
@@ -1790,26 +1783,17 @@ func (session *Session) txQuery(tx *core.Tx, sqlStr string, params ...interface{
 	return rows2maps(rows)
 }
 
-func (session *Session) innerQuery(db *core.DB, sqlStr string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
-
-	stmt, rows, err := session.Engine.LogSQLQueryTime(sqlStr, params, func() (*core.Stmt, *core.Rows, error) {
-		stmt, err := db.Prepare(sqlStr)
-		if err != nil {
-			return stmt, nil, err
-		}
-		rows, err := stmt.Query(params...)
-
-		return stmt, rows, err
-	})
-	if rows != nil {
-		defer rows.Close()
-	}
-	if stmt != nil {
-		defer stmt.Close()
-	}
+func query(db *core.DB, sqlStr string, params ...interface{}) (resultsSlice []map[string][]byte, err error) {
+	s, err := db.Prepare(sqlStr)
 	if err != nil {
 		return nil, err
 	}
+	defer s.Close()
+	rows, err := s.Query(params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	return rows2maps(rows)
 }
 
@@ -1975,7 +1959,6 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 		strings.Join(colMultiPlaces, "),("))
 
 	res, err := session.exec(statement, args...)
-
 	if err != nil {
 		return 0, err
 	}
