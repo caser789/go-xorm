@@ -225,12 +225,7 @@ func (session *Session) Desc(colNames ...string) *Session {
 
 // Method Asc provide asc order by query condition, the input parameters are columns.
 func (session *Session) Asc(colNames ...string) *Session {
-	if session.Statement.OrderStr != "" {
-		session.Statement.OrderStr += ", "
-	}
-	newColNames := col2NewCols(colNames...)
-	sqlStr := strings.Join(newColNames, session.Engine.Quote(" ASC, "))
-	session.Statement.OrderStr += session.Engine.Quote(sqlStr) + " ASC"
+	session.Statement.Asc(colNames...)
 	return session
 }
 
@@ -1396,6 +1391,34 @@ func (session *Session) dropAll() error {
 	return nil
 }
 
+func row2mapStr(rows *core.Rows, fields []string) (resultsMap map[string]string, err error) {
+	result := make(map[string]string)
+	scanResultContainers := make([]interface{}, len(fields))
+	for i := 0; i < len(fields); i++ {
+		var scanResultContainer interface{}
+		scanResultContainers[i] = &scanResultContainer
+	}
+	if err := rows.Scan(scanResultContainers...); err != nil {
+		return nil, err
+	}
+
+	for ii, key := range fields {
+		rawValue := reflect.Indirect(reflect.ValueOf(scanResultContainers[ii]))
+		//if row is null then ignore
+		if rawValue.Interface() == nil {
+			//fmt.Println("ignore ...", key, rawValue)
+			continue
+		}
+
+		if data, err := value2String(&rawValue); err == nil {
+			result[key] = data
+		} else {
+			return nil, err // !nashtsai! REVIEW, should return err or just error log?
+		}
+	}
+	return result, nil
+}
+
 func row2map(rows *core.Rows, fields []string) (resultsMap map[string][]byte, err error) {
 	result := make(map[string][]byte)
 	scanResultContainers := make([]interface{}, len(fields))
@@ -1842,6 +1865,55 @@ func (session *Session) Query(sqlStr string, paramStr ...interface{}) (resultsSl
 	}
 
 	return session.query(sqlStr, paramStr...)
+}
+
+// =============================
+// for string
+// =============================
+func (session *Session) query2(sqlStr string, paramStr ...interface{}) (resultsSlice []map[string]string, err error) {
+	session.queryPreprocess(&sqlStr, paramStr...)
+
+	if session.IsAutoCommit {
+		return query2(session.Db, sqlStr, paramStr...)
+	}
+	return txQuery2(session.Tx, sqlStr, paramStr...)
+}
+
+func txQuery2(tx *core.Tx, sqlStr string, params ...interface{}) (resultsSlice []map[string]string, err error) {
+	rows, err := tx.Query(sqlStr, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return rows2Strings(rows)
+}
+
+func query2(db *core.DB, sqlStr string, params ...interface{}) (resultsSlice []map[string]string, err error) {
+	s, err := db.Prepare(sqlStr)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	rows, err := s.Query(params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return rows2Strings(rows)
+}
+
+// Exec a raw sql and return records as []map[string]string
+func (session *Session) Q(sqlStr string, paramStr ...interface{}) (resultsSlice []map[string]string, err error) {
+	err = session.newDb()
+	if err != nil {
+		return nil, err
+	}
+	defer session.resetStatement()
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+	return session.query2(sqlStr, paramStr...)
 }
 
 // insert one or more beans
@@ -3330,13 +3402,39 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 		return 0, ErrNeedDeletedCond
 	}
 
-	sqlStr := fmt.Sprintf("DELETE FROM %v WHERE %v",
-		session.Engine.Quote(session.Statement.TableName()), condition)
+	sqlStr, sqlStrForCache := "", ""
+	argsForCache := make([]interface{}, 0, len(args) * 2)
+	if session.Engine.unscoped || table.SoftDeleteColumn() == nil { // softdelete is disabled
+		sqlStr = fmt.Sprintf("DELETE FROM %v WHERE %v",
+			session.Engine.Quote(session.Statement.TableName()), condition)
+
+		sqlStrForCache = sqlStr
+		copy(argsForCache, args)
+		argsForCache = append(session.Statement.Params, argsForCache...)
+	} else {
+		// !oinume! sqlStrForCache and argsForCache is needed to behave as executing "DELETE FROM ..." for cache.
+		sqlStrForCache = fmt.Sprintf("DELETE FROM %v WHERE %v",
+			session.Engine.Quote(session.Statement.TableName()), condition)
+		copy(argsForCache, args)
+		argsForCache = append(session.Statement.Params, argsForCache...)
+
+		softDeleteCol := table.SoftDeleteColumn()
+		sqlStr = fmt.Sprintf("UPDATE %v SET %v = ? WHERE %v",
+			session.Engine.Quote(session.Statement.TableName()),
+			session.Engine.Quote(softDeleteCol.Name),
+			condition)
+
+		// !oinume! Insert NowTime to the head of session.Statement.Params
+		session.Statement.Params = append(session.Statement.Params, "")
+		paramsLen := len(session.Statement.Params)
+		copy(session.Statement.Params[1:paramsLen], session.Statement.Params[0:paramsLen-1])
+		session.Statement.Params[0] = session.Engine.NowTime(softDeleteCol.SQLType.Name)
+	}
 
 	args = append(session.Statement.Params, args...)
 
 	if cacher := session.Engine.getCacher2(session.Statement.RefTable); cacher != nil && session.Statement.UseCache {
-		session.cacheDelete(sqlStr, args...)
+		session.cacheDelete(sqlStrForCache, argsForCache...)
 	}
 
 	res, err := session.exec(sqlStr, args...)
@@ -3373,6 +3471,171 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	// --
 
 	return res.RowsAffected()
+}
+
+func (s *Session) Sync2(beans ...interface{}) error {
+	engine := s.Engine
+
+	tables, err := engine.DBMetas()
+	if err != nil {
+		return err
+	}
+
+	structTables := make([]*core.Table, 0)
+
+	for _, bean := range beans {
+		table := engine.TableInfo(bean)
+		structTables = append(structTables, table)
+
+		var oriTable *core.Table
+		for _, tb := range tables {
+			if tb.Name == table.Name {
+				oriTable = tb
+				break
+			}
+		}
+
+		if oriTable == nil {
+			err = engine.StoreEngine(s.Statement.StoreEngine).CreateTable(bean)
+			if err != nil {
+				return err
+			}
+
+			err = engine.CreateUniques(bean)
+			if err != nil {
+				return err
+			}
+
+			err = engine.CreateIndexes(bean)
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, col := range table.Columns() {
+				var oriCol *core.Column
+				for _, col2 := range oriTable.Columns() {
+					if col.Name == col2.Name {
+						oriCol = col2
+						break
+					}
+				}
+
+				if oriCol != nil {
+					expectedType := engine.dialect.SqlType(col)
+					//curType := oriCol.SQLType.Name
+					curType := engine.dialect.SqlType(oriCol)
+					if expectedType != curType {
+						if expectedType == core.Text &&
+							strings.HasPrefix(curType, core.Varchar) {
+							// currently only support mysql
+							if engine.dialect.DBType() == core.MYSQL ||
+								engine.dialect.DBType() == core.POSTGRES {
+								engine.LogInfof("Table %s column %s change type from %s to %s\n",
+									table.Name, col.Name, curType, expectedType)
+								_, err = engine.Exec(engine.dialect.ModifyColumnSql(table.Name, col))
+							} else {
+								engine.LogWarnf("Table %s column %s db type is %s, struct type is %s\n",
+									table.Name, col.Name, curType, expectedType)
+							}
+						} else {
+							engine.LogWarnf("Table %s column %s db type is %s, struct type is %s",
+								table.Name, col.Name, curType, expectedType)
+						}
+					}
+					if col.Default != oriCol.Default {
+						engine.LogWarnf("Table %s Column %s db default is %s, struct default is %s",
+							table.Name, col.Name, oriCol.Default, col.Default)
+					}
+					if col.Nullable != oriCol.Nullable {
+						engine.LogWarnf("Table %s Column %s db nullable is %v, struct nullable is %v",
+							table.Name, col.Name, oriCol.Nullable, col.Nullable)
+					}
+				} else {
+					session := engine.NewSession()
+					session.Statement.RefTable = table
+					defer session.Close()
+					err = session.addColumn(col.Name)
+				}
+				if err != nil {
+					return err
+				}
+			}
+
+			var foundIndexNames = make(map[string]bool)
+
+			for name, index := range table.Indexes {
+				var oriIndex *core.Index
+				for name2, index2 := range oriTable.Indexes {
+					if index.Equal(index2) {
+						oriIndex = index2
+						foundIndexNames[name2] = true
+						break
+					}
+				}
+
+				if oriIndex != nil {
+					if oriIndex.Type != index.Type {
+						sql := engine.dialect.DropIndexSql(table.Name, oriIndex)
+						_, err = engine.Exec(sql)
+						if err != nil {
+							return err
+						}
+						oriIndex = nil
+					}
+				}
+
+				if oriIndex == nil {
+					if index.Type == core.UniqueType {
+						session := engine.NewSession()
+						session.Statement.RefTable = table
+						defer session.Close()
+						err = session.addUnique(table.Name, name)
+					} else if index.Type == core.IndexType {
+						session := engine.NewSession()
+						session.Statement.RefTable = table
+						defer session.Close()
+						err = session.addIndex(table.Name, name)
+					}
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			for name2, index2 := range oriTable.Indexes {
+				if _, ok := foundIndexNames[name2]; !ok {
+					sql := engine.dialect.DropIndexSql(table.Name, index2)
+					_, err = engine.Exec(sql)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	for _, table := range tables {
+		var oriTable *core.Table
+		for _, structTable := range structTables {
+			if table.Name == structTable.Name {
+				oriTable = structTable
+				break
+			}
+		}
+
+		if oriTable == nil {
+			//engine.LogWarnf("Table %s has no struct to mapping it", table.Name)
+			continue
+		}
+
+		for _, colName := range table.ColumnsSeq() {
+			if oriTable.GetColumn(colName) == nil {
+				engine.LogWarnf("Table %s has column %s but struct has not related field",
+					table.Name, colName)
+			}
+		}
+	}
+	return nil
 }
 
 func genCols(table *core.Table, session *Session, bean interface{}, useCol bool, includeQuote bool) ([]string, []interface{}, error) {
@@ -3412,6 +3675,10 @@ func genCols(table *core.Table, session *Session, bean interface{}, useCol bool,
 					continue
 				}
 			}
+		}
+
+		if col.IsSoftDelete {
+			continue
 		}
 
 		if session.Statement.ColumnStr != "" {

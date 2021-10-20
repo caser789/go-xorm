@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"database/sql"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -44,6 +45,7 @@ type Engine struct {
 	TZLocation *time.Location
 
 	disableGlobalCache bool
+	unscoped           bool
 }
 
 func (engine *Engine) SetDisableGlobalCache(disable bool) {
@@ -623,9 +625,20 @@ func (engine *Engine) autoMapType(v reflect.Value) *core.Table {
 		table = engine.mapType(v)
 		engine.mutex.Lock()
 		engine.Tables[t] = table
+		if v.CanAddr() {
+			engine.GobRegister(v.Addr().Interface())
+		} else {
+			engine.GobRegister(v.Interface())
+		}
 		engine.mutex.Unlock()
 	}
 	return table
+}
+
+func (engine *Engine) GobRegister(v interface{}) *Engine {
+	//fmt.Printf("Type: %[1]T => Data: %[1]#v\n", v)
+	gob.Register(v)
+	return engine
 }
 
 func (engine *Engine) TableInfo(bean interface{}) *core.Table {
@@ -784,6 +797,8 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 						if !hasNoCacheTag {
 							hasNoCacheTag = true
 						}
+					case k == "SOFTDELETE":
+						col.IsSoftDelete = true
 					case k == "NOT":
 					default:
 						if strings.HasPrefix(k, "'") && strings.HasSuffix(k, "'") {
@@ -1141,166 +1156,9 @@ func (engine *Engine) Sync(beans ...interface{}) error {
 }
 
 func (engine *Engine) Sync2(beans ...interface{}) error {
-	tables, err := engine.DBMetas()
-	if err != nil {
-		return err
-	}
-
-	structTables := make([]*core.Table, 0)
-
-	for _, bean := range beans {
-		table := engine.TableInfo(bean)
-		structTables = append(structTables, table)
-
-		var oriTable *core.Table
-		for _, tb := range tables {
-			if tb.Name == table.Name {
-				oriTable = tb
-				break
-			}
-		}
-
-		if oriTable == nil {
-			err = engine.CreateTables(bean)
-			if err != nil {
-				return err
-			}
-
-			err = engine.CreateUniques(bean)
-			if err != nil {
-				return err
-			}
-
-			err = engine.CreateIndexes(bean)
-			if err != nil {
-				return err
-			}
-		} else {
-			for _, col := range table.Columns() {
-				var oriCol *core.Column
-				for _, col2 := range oriTable.Columns() {
-					if col.Name == col2.Name {
-						oriCol = col2
-						break
-					}
-				}
-
-				if oriCol != nil {
-					expectedType := engine.dialect.SqlType(col)
-					//curType := oriCol.SQLType.Name
-					curType := engine.dialect.SqlType(oriCol)
-					if expectedType != curType {
-						if expectedType == core.Text &&
-							strings.HasPrefix(curType, core.Varchar) {
-							// currently only support mysql
-							if engine.dialect.DBType() == core.MYSQL ||
-								engine.dialect.DBType() == core.POSTGRES {
-								engine.LogInfof("Table %s column %s change type from %s to %s\n",
-									table.Name, col.Name, curType, expectedType)
-								_, err = engine.Exec(engine.dialect.ModifyColumnSql(table.Name, col))
-							} else {
-								engine.LogWarnf("Table %s column %s db type is %s, struct type is %s\n",
-									table.Name, col.Name, curType, expectedType)
-							}
-						} else {
-							engine.LogWarnf("Table %s column %s db type is %s, struct type is %s",
-								table.Name, col.Name, curType, expectedType)
-						}
-					}
-					if col.Default != oriCol.Default {
-						engine.LogWarnf("Table %s Column %s db default is %s, struct default is %s",
-							table.Name, col.Name, oriCol.Default, col.Default)
-					}
-					if col.Nullable != oriCol.Nullable {
-						engine.LogWarnf("Table %s Column %s db nullable is %v, struct nullable is %v",
-							table.Name, col.Name, oriCol.Nullable, col.Nullable)
-					}
-				} else {
-					session := engine.NewSession()
-					session.Statement.RefTable = table
-					defer session.Close()
-					err = session.addColumn(col.Name)
-				}
-				if err != nil {
-					return err
-				}
-			}
-
-			var foundIndexNames = make(map[string]bool)
-
-			for name, index := range table.Indexes {
-				var oriIndex *core.Index
-				for name2, index2 := range oriTable.Indexes {
-					if index.Equal(index2) {
-						oriIndex = index2
-						foundIndexNames[name2] = true
-						break
-					}
-				}
-
-				if oriIndex != nil {
-					if oriIndex.Type != index.Type {
-						sql := engine.dialect.DropIndexSql(table.Name, oriIndex)
-						_, err = engine.Exec(sql)
-						if err != nil {
-							return err
-						}
-						oriIndex = nil
-					}
-				}
-
-				if oriIndex == nil {
-					if index.Type == core.UniqueType {
-						session := engine.NewSession()
-						session.Statement.RefTable = table
-						defer session.Close()
-						err = session.addUnique(table.Name, name)
-					} else if index.Type == core.IndexType {
-						session := engine.NewSession()
-						session.Statement.RefTable = table
-						defer session.Close()
-						err = session.addIndex(table.Name, name)
-					}
-					if err != nil {
-						return err
-					}
-				}
-			}
-
-			for name2, index2 := range oriTable.Indexes {
-				if _, ok := foundIndexNames[name2]; !ok {
-					sql := engine.dialect.DropIndexSql(table.Name, index2)
-					_, err = engine.Exec(sql)
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-
-	for _, table := range tables {
-		var oriTable *core.Table
-		for _, structTable := range structTables {
-			if table.Name == structTable.Name {
-				oriTable = structTable
-				break
-			}
-		}
-
-		if oriTable == nil {
-			//engine.LogWarnf("Table %s has no struct to mapping it", table.Name)
-			continue
-		}
-
-		for _, colName := range table.ColumnsSeq() {
-			if oriTable.GetColumn(colName) == nil {
-				engine.LogWarnf("Table %s has column %s but struct has not related field",
-					table.Name, colName)
-			}
-		}
-	}
-	return nil
+	s := engine.NewSession()
+	defer s.Close()
+	return s.Sync2(beans...)
 }
 
 func (engine *Engine) unMap(beans ...interface{}) (e error) {
@@ -1558,4 +1416,10 @@ func (engine *Engine) FormatTime(sqlTypeName string, t time.Time) (v interface{}
 		v = engine.TZTime(t)
 	}
 	return
+}
+
+// Disable soft delete
+func (engine *Engine) Unscoped() *Engine {
+	engine.unscoped = true
+	return engine
 }
