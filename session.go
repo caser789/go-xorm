@@ -1,3 +1,7 @@
+// Copyright 2015 The Xorm Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package xorm
 
 import (
@@ -722,7 +726,7 @@ func (session *Session) cacheGet(bean interface{}, sqlStr string, args ...interf
 func (session *Session) cacheFind(t reflect.Type, sqlStr string, rowsSlicePtr interface{}, args ...interface{}) (err error) {
 	if session.Statement.RefTable == nil ||
 		indexNoCase(sqlStr, "having") != -1 ||
-		indexNoCase(sqlStr, "group by") != -1  ||
+		indexNoCase(sqlStr, "group by") != -1 ||
 		session.Tx != nil {
 		return ErrCacheFailed
 	}
@@ -998,9 +1002,9 @@ func (session *Session) Get(bean interface{}) (bool, error) {
 	var err error
 	session.queryPreprocess(&sqlStr, args...)
 	if session.IsAutoCommit {
-		stmt, err := session.doPrepare(sqlStr)
-		if err != nil {
-			return false, err
+		stmt, errPrepare := session.doPrepare(sqlStr)
+		if errPrepare != nil {
+			return false, errPrepare
 		}
 		// defer stmt.Close() // !nashtsai! don't close due to stmt is cached and bounded to this session
 		rawRows, err = stmt.Query(args...)
@@ -2892,20 +2896,15 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 	case reflect.String:
 		return fieldValue.String(), nil
 	case reflect.Struct:
-		if fieldType == core.TimeType {
-			switch fieldValue.Interface().(type) {
-			case time.Time:
-				t := fieldValue.Interface().(time.Time)
-				if session.Engine.dialect.DBType() == core.MSSQL {
-					if t.IsZero() {
-						return nil, nil
-					}
+		if fieldType.ConvertibleTo(core.TimeType) {
+			t := fieldValue.Convert(core.TimeType).Interface().(time.Time)
+			if session.Engine.dialect.DBType() == core.MSSQL {
+				if t.IsZero() {
+					return nil, nil
 				}
-				tf := session.Engine.FormatTime(col.SQLType.Name, t)
-				return tf, nil
-			default:
-				return fieldValue.Interface(), nil
 			}
+			tf := session.Engine.FormatTime(col.SQLType.Name, t)
+			return tf, nil
 		}
 		if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
 			if len(fieldTable.PrimaryKeys) == 1 {
@@ -2915,7 +2914,7 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 				return 0, fmt.Errorf("no primary key for col %v", col.Name)
 			}
 		} else {
-			return 0, fmt.Errorf("Unsupported type %v\n", fieldValue.Type())
+			return 0, fmt.Errorf("Unsupported type %v", fieldValue.Type())
 		}
 	case reflect.Complex64, reflect.Complex128:
 		bytes, err := json.Marshal(fieldValue.Interface())

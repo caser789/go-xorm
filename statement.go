@@ -1,3 +1,7 @@
+// Copyright 2015 The Xorm Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package xorm
 
 import (
@@ -611,7 +615,7 @@ func buildConditions(engine *Engine, table *core.Table, bean interface{},
 						}
 					} else {
 						//TODO: how to handler?
-						panic("not supported")
+						panic(fmt.Sprintln("not supported", fieldValue.Interface(), "as", table.PrimaryKeys))
 					}
 				} else {
 					val = fieldValue.Interface()
