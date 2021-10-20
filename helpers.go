@@ -70,28 +70,23 @@ func sliceEq(left, right []string) bool {
 	return true
 }
 
-func value2Bytes(rawValue *reflect.Value) (data []byte, err error) {
+func reflect2value(rawValue *reflect.Value) (str string, err error) {
 	aa := reflect.TypeOf((*rawValue).Interface())
 	vv := reflect.ValueOf((*rawValue).Interface())
-
-	var str string
 	switch aa.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		str = strconv.FormatInt(vv.Int(), 10)
-		data = []byte(str)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		str = strconv.FormatUint(vv.Uint(), 10)
-		data = []byte(str)
 	case reflect.Float32, reflect.Float64:
 		str = strconv.FormatFloat(vv.Float(), 'f', -1, 64)
-		data = []byte(str)
 	case reflect.String:
 		str = vv.String()
-		data = []byte(str)
 	case reflect.Array, reflect.Slice:
 		switch aa.Elem().Kind() {
 		case reflect.Uint8:
-			data = rawValue.Interface().([]byte)
+			data := rawValue.Interface().([]byte)
+			str = string(data)
 		default:
 			err = fmt.Errorf("Unsupported struct type %v", vv.Type().Name())
 		}
@@ -99,16 +94,13 @@ func value2Bytes(rawValue *reflect.Value) (data []byte, err error) {
 	case reflect.Struct:
 		if aa == core.TimeType {
 			str = rawValue.Interface().(time.Time).Format(time.RFC3339Nano)
-			data = []byte(str)
 		} else {
 			err = fmt.Errorf("Unsupported struct type %v", vv.Type().Name())
 		}
 	case reflect.Bool:
 		str = strconv.FormatBool(vv.Bool())
-		data = []byte(str)
 	case reflect.Complex128, reflect.Complex64:
 		str = fmt.Sprintf("%v", vv.Complex())
-		data = []byte(str)
 	/* TODO: unsupported types below
 	   case reflect.Map:
 	   case reflect.Ptr:
@@ -120,6 +112,40 @@ func value2Bytes(rawValue *reflect.Value) (data []byte, err error) {
 		err = fmt.Errorf("Unsupported struct type %v", vv.Type().Name())
 	}
 	return
+}
+
+func value2Bytes(rawValue *reflect.Value) (data []byte, err error) {
+	var str string
+	str, err = reflect2value(rawValue)
+	if err != nil {
+		return
+	}
+	data = []byte(str)
+	return
+}
+
+func value2String(rawValue *reflect.Value) (data string, err error) {
+	data, err = reflect2value(rawValue)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func rows2Strings(rows *core.Rows) (resultsSlice []map[string]string, err error) {
+	fields, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		result, err := row2mapStr(rows, fields)
+		if err != nil {
+			return nil, err
+		}
+		resultsSlice = append(resultsSlice, result)
+	}
+
+	return resultsSlice, nil
 }
 
 func rows2maps(rows *core.Rows) (resultsSlice []map[string][]byte, err error) {
@@ -136,4 +162,160 @@ func rows2maps(rows *core.Rows) (resultsSlice []map[string][]byte, err error) {
 	}
 
 	return resultsSlice, nil
+}
+
+func row2map(rows *core.Rows, fields []string) (resultsMap map[string][]byte, err error) {
+	result := make(map[string][]byte)
+	scanResultContainers := make([]interface{}, len(fields))
+	for i := 0; i < len(fields); i++ {
+		var scanResultContainer interface{}
+		scanResultContainers[i] = &scanResultContainer
+	}
+	if err := rows.Scan(scanResultContainers...); err != nil {
+		return nil, err
+	}
+
+	for ii, key := range fields {
+		rawValue := reflect.Indirect(reflect.ValueOf(scanResultContainers[ii]))
+		//if row is null then ignore
+		if rawValue.Interface() == nil {
+			//fmt.Println("ignore ...", key, rawValue)
+			continue
+		}
+
+		if data, err := value2Bytes(&rawValue); err == nil {
+			result[key] = data
+		} else {
+			return nil, err // !nashtsai! REVIEW, should return err or just error log?
+		}
+	}
+	return result, nil
+}
+
+func row2mapStr(rows *core.Rows, fields []string) (resultsMap map[string]string, err error) {
+	result := make(map[string]string)
+	scanResultContainers := make([]interface{}, len(fields))
+	for i := 0; i < len(fields); i++ {
+		var scanResultContainer interface{}
+		scanResultContainers[i] = &scanResultContainer
+	}
+	if err := rows.Scan(scanResultContainers...); err != nil {
+		return nil, err
+	}
+
+	for ii, key := range fields {
+		rawValue := reflect.Indirect(reflect.ValueOf(scanResultContainers[ii]))
+		//if row is null then ignore
+		if rawValue.Interface() == nil {
+			//fmt.Println("ignore ...", key, rawValue)
+			continue
+		}
+
+		if data, err := value2String(&rawValue); err == nil {
+			result[key] = data
+		} else {
+			return nil, err // !nashtsai! REVIEW, should return err or just error log?
+		}
+	}
+	return result, nil
+}
+
+func txQuery2(tx *core.Tx, sqlStr string, params ...interface{}) (resultsSlice []map[string]string, err error) {
+	rows, err := tx.Query(sqlStr, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return rows2Strings(rows)
+}
+
+func query2(db *core.DB, sqlStr string, params ...interface{}) (resultsSlice []map[string]string, err error) {
+	s, err := db.Prepare(sqlStr)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	rows, err := s.Query(params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return rows2Strings(rows)
+}
+
+func genCols(table *core.Table, session *Session, bean interface{}, useCol bool, includeQuote bool) ([]string, []interface{}, error) {
+	colNames := make([]string, 0)
+	args := make([]interface{}, 0)
+
+	for _, col := range table.Columns() {
+		lColName := strings.ToLower(col.Name)
+		if useCol && !col.IsVersion && !col.IsCreated && !col.IsUpdated {
+			if _, ok := session.Statement.columnMap[lColName]; !ok {
+				continue
+			}
+		}
+		if col.MapType == core.ONLYFROMDB {
+			continue
+		}
+
+		fieldValuePtr, err := col.ValueOf(bean)
+		if err != nil {
+			session.Engine.LogError(err)
+			continue
+		}
+		fieldValue := *fieldValuePtr
+
+		if col.IsAutoIncrement {
+			switch fieldValue.Type().Kind() {
+			case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int, reflect.Int64:
+				if fieldValue.Int() == 0 {
+					continue
+				}
+			case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint, reflect.Uint64:
+				if fieldValue.Uint() == 0 {
+					continue
+				}
+			case reflect.String:
+				if len(fieldValue.String()) == 0 {
+					continue
+				}
+			}
+		}
+
+		if col.IsDeleted {
+			continue
+		}
+
+		if session.Statement.ColumnStr != "" {
+			if _, ok := session.Statement.columnMap[lColName]; !ok {
+				continue
+			}
+		}
+		if session.Statement.OmitStr != "" {
+			if _, ok := session.Statement.columnMap[lColName]; ok {
+				continue
+			}
+		}
+
+		if (col.IsCreated || col.IsUpdated) && session.Statement.UseAutoTime {
+			args = append(args, session.Engine.NowTime(col.SQLType.Name))
+		} else if col.IsVersion && session.Statement.checkVersion {
+			args = append(args, 1)
+			//} else if !col.DefaultIsEmpty {
+		} else {
+			arg, err := session.value2Interface(col, fieldValue)
+			if err != nil {
+				return colNames, args, err
+			}
+			args = append(args, arg)
+		}
+
+		if includeQuote {
+			colNames = append(colNames, session.Engine.Quote(col.Name)+" = ?")
+		} else {
+			colNames = append(colNames, col.Name)
+		}
+	}
+	return colNames, args, nil
 }
