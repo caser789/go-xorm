@@ -448,6 +448,13 @@ func (session *Session) exec(sqlStr string, args ...interface{}) (sql.Result, er
 
 	return session.Engine.LogSQLExecutionTime(sqlStr, args, func() (sql.Result, error) {
 		if session.IsAutoCommit {
+			//oci8 can not auto commit (github.com/mattn/go-oci8)
+			if session.Engine.dialect.DBType() == core.ORACLE {
+				session.Begin()
+				r, err := session.Tx.Exec(sqlStr, args...)
+				session.Commit()
+				return r, err
+			}
 			return session.innerExec(sqlStr, args...)
 		}
 		return session.Tx.Exec(sqlStr, args...)
@@ -556,14 +563,14 @@ func (session *Session) DropIndexes(bean interface{}) error {
 }
 
 // DropTable drop a table and all indexes of the table
-func (session *Session) DropTable(bean interface{}) error {
+/*func (session *Session) DropTable(bean interface{}) error {
 	defer session.resetStatement()
 	if session.IsAutoClose {
 		defer session.Close()
 	}
 
 	t := reflect.Indirect(reflect.ValueOf(bean)).Type()
-	defer session.resetStatement()
+
 	if t.Kind() == reflect.String {
 		session.Statement.AltTableName = bean.(string)
 	} else if t.Kind() == reflect.Struct {
@@ -572,10 +579,34 @@ func (session *Session) DropTable(bean interface{}) error {
 		return errors.New("Unsupported type")
 	}
 
-	return session.Engine.Dialect().MustDropTable(session.Statement.TableName())
-	/*sqlStr := session.Statement.genDropSQL()
+	//return session.Engine.Dialect().MustDropTable(session.Statement.TableName())
+	sqlStr := session.Engine.Dialect().DropTableSql(session.Statement.TableName())
 	_, err := session.exec(sqlStr)
-	return err*/
+	return err
+}*/
+
+func (session *Session) DropTable(beanOrTableName interface{}) error {
+	tableName, err := session.Engine.tableName(beanOrTableName)
+	if err != nil {
+		return err
+	}
+
+	var needDrop = true
+	if !session.Engine.dialect.SupportDropIfExists() {
+		sqlStr, args := session.Engine.dialect.TableCheckSql(tableName)
+		results, err := session.query(sqlStr, args...)
+		if err != nil {
+			return err
+		}
+		needDrop = len(results) > 0
+	}
+
+	if needDrop {
+		sqlStr := session.Engine.Dialect().DropTableSql(tableName)
+		_, err = session.exec(sqlStr)
+		return err
+	}
+	return nil
 }
 
 func (statement *Statement) JoinColumns(cols []*core.Column) string {
@@ -1166,11 +1197,19 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 		var columnStr string = session.Statement.ColumnStr
 		if session.Statement.JoinStr == "" {
 			if columnStr == "" {
-				columnStr = session.Statement.genColumnStr()
+				if session.Statement.GroupByStr != "" {
+					columnStr = session.Statement.Engine.Quote(strings.Replace(session.Statement.GroupByStr, ",", session.Engine.Quote(","), -1))
+				} else {
+					columnStr = session.Statement.genColumnStr()
+				}
 			}
 		} else {
 			if columnStr == "" {
-				columnStr = "*"
+				if session.Statement.GroupByStr != "" {
+					columnStr = session.Statement.Engine.Quote(strings.Replace(session.Statement.GroupByStr, ",", session.Engine.Quote(","), -1))
+				} else {
+					columnStr = "*"
+				}
 			}
 		}
 
@@ -1352,16 +1391,21 @@ func (session *Session) isColumnExist(tableName string, col *core.Column) (bool,
 	//return len(results) > 0, err
 }*/
 
-func (session *Session) IsTableExist(beanOrTableName interface{}) (bool, error) {
+func (engine *Engine) tableName(beanOrTableName interface{}) (string, error) {
 	v := rValue(beanOrTableName)
-	var tableName string
 	if v.Type().Kind() == reflect.String {
-		tableName = beanOrTableName.(string)
+		return beanOrTableName.(string), nil
 	} else if v.Type().Kind() == reflect.Struct {
-		table := session.Engine.autoMapType(v)
-		tableName = table.Name
-	} else {
-		return false, errors.New("bean should be a struct or struct's point")
+		table := engine.autoMapType(v)
+		return table.Name, nil
+	}
+	return "", errors.New("bean should be a struct or struct's point")
+}
+
+func (session *Session) IsTableExist(beanOrTableName interface{}) (bool, error) {
+	tableName, err := session.Engine.tableName(beanOrTableName)
+	if err != nil {
+		return false, err
 	}
 
 	return session.isTableExist(tableName)
@@ -1492,9 +1536,8 @@ func (session *Session) dropAll() error {
 	for _, table := range session.Engine.Tables {
 		session.Statement.Init()
 		session.Statement.RefTable = table
-		err := session.Engine.Dialect().MustDropTable(session.Statement.TableName())
-		//sqlStr := session.Statement.genDropSQL()
-		//_, err := session.exec(sqlStr)
+		sqlStr := session.Engine.Dialect().DropTableSql(session.Statement.TableName())
+		_, err := session.exec(sqlStr)
 		if err != nil {
 			return err
 		}
@@ -1681,14 +1724,12 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 						z, _ := t.Zone()
 						if len(z) == 0 || t.Year() == 0 { // !nashtsai! HACK tmp work around for lib/pq doesn't properly time with location
 							session.Engine.LogDebug("empty zone key[%v] : %v | zone: %v | location: %+v\n", key, t, z, *t.Location())
-							tt := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(),
+							t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(),
 								t.Minute(), t.Second(), t.Nanosecond(), time.Local)
-							vv = reflect.ValueOf(tt)
 						}
 						// !nashtsai! convert to engine location
-						t = vv.Convert(core.TimeType).Interface().(time.Time).In(session.Engine.TZLocation)
-						vv = reflect.ValueOf(t)
-						fieldValue.Set(vv)
+						t = t.In(session.Engine.TZLocation)
+						fieldValue.Set(reflect.ValueOf(t).Convert(fieldType))
 
 						// t = fieldValue.Interface().(time.Time)
 						// z, _ = t.Zone()
@@ -3369,7 +3410,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 		if session.Statement.ColumnStr == "" {
 			colNames, args = buildUpdates(session.Engine, table, bean, false, false,
 				false, false, session.Statement.allUseBool, session.Statement.useAllCols,
-				session.Statement.mustColumnMap, true)
+				session.Statement.mustColumnMap, session.Statement.columnMap, true)
 		} else {
 			colNames, args, err = genCols(table, session, bean, true, true)
 			if err != nil {
@@ -3472,6 +3513,10 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 			}
 		}
 
+		if st.LimitN > 0 {
+			condition = condition + fmt.Sprintf(" LIMIT %d", st.LimitN)
+		}
+
 		sqlStr = fmt.Sprintf("UPDATE %v SET %v, %v %v",
 			session.Engine.Quote(session.Statement.TableName()),
 			strings.Join(colNames, ", "),
@@ -3496,6 +3541,10 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 			} else {
 				condition = "WHERE " + inSql
 			}
+		}
+
+		if st.LimitN > 0 {
+			condition = condition + fmt.Sprintf(" LIMIT %d", st.LimitN)
 		}
 
 		sqlStr = fmt.Sprintf("UPDATE %v SET %v %v",
