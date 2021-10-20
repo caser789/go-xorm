@@ -39,6 +39,14 @@ type Engine struct {
 
 	Logger     ILogger // io.Writer
 	TZLocation *time.Location
+
+	disableGlobalCache bool
+}
+
+func (engine *Engine) SetDisableGlobalCache(disable bool) {
+	if engine.disableGlobalCache != disable {
+		engine.disableGlobalCache = disable
+	}
 }
 
 func (engine *Engine) DriverName() string {
@@ -175,10 +183,34 @@ func (engine *Engine) Ping() error {
 func (engine *Engine) logSQL(sqlStr string, sqlArgs ...interface{}) {
 	if engine.ShowSQL {
 		if len(sqlArgs) > 0 {
-			engine.Logger.Info(fmt.Sprintln("[sql]", sqlStr, "[args]", sqlArgs))
+			engine.Logger.Info(fmt.Sprintf("[sql]", sqlStr, "[args]", sqlArgs))
 		} else {
-			engine.Logger.Info(fmt.Sprintln("[sql]", sqlStr))
+			engine.Logger.Info(fmt.Sprintf("[sql]", sqlStr))
 		}
+	}
+}
+
+func (engine *Engine) LogSQLQueryTime(sqlStr string, args interface{}, executionBlock func() (*core.Stmt, *core.Rows, error)) (*core.Stmt, *core.Rows, error) {
+	if engine.ShowDebug {
+		b4ExecTime := time.Now()
+		stmt, res, err := executionBlock()
+		execDuration := time.Since(b4ExecTime)
+		engine.LogDebugf("sql [%s] - args [%v] - query took: %vns", sqlStr, args, execDuration.Nanoseconds())
+		return stmt, res, err
+	} else {
+		return executionBlock()
+	}
+}
+
+func (engine *Engine) LogSQLExecutionTime(sqlStr string, args interface{}, executionBlock func() (sql.Result, error)) (sql.Result, error) {
+	if engine.ShowDebug {
+		b4ExecTime := time.Now()
+		res, err := executionBlock()
+		execDuration := time.Since(b4ExecTime)
+		engine.LogDebugf("sql [%s] - args [%v] - execution took: %vns", sqlStr, args, execDuration.Nanoseconds())
+		return res, err
+	} else {
+		return executionBlock()
 	}
 }
 
@@ -587,8 +619,37 @@ func addIndex(indexName string, table *core.Table, col *core.Column, indexType i
 
 func (engine *Engine) newTable() *core.Table {
 	table := core.NewEmptyTable()
-	table.Cacher = engine.Cacher
+
+	if !engine.disableGlobalCache {
+		table.Cacher = engine.Cacher
+	}
 	return table
+}
+
+func (engine *Engine) processCacherTag(table *core.Table, v reflect.Value, cacherTagStr string) {
+
+	for _, part := range strings.Split(cacherTagStr, ",") {
+		switch {
+		case part == "false": // even if engine has assigned cacher, this table will not have cache support
+			table.Cacher = nil
+			return
+
+		case part == "true": // use default 'read-write' cache
+			if engine.Cacher != nil { // !nash! use engine's cacher if provided
+				table.Cacher = engine.Cacher
+			} else {
+				table.Cacher = NewLRUCacher2(NewMemoryStore(), time.Hour, 10000) // !nashtsai! HACK use LRU cacher for now
+			}
+			return
+			// TODO
+			// case strings.HasPrefix(part, "usage:"):
+			// 	usageStr := part[len("usage:"):]
+
+			// case strings.HasPrefix(part, "include:"):
+			// 	includeStr := part[len("include:"):]
+		}
+
+	}
 }
 
 func (engine *Engine) mapType(v reflect.Value) *core.Table {
@@ -616,10 +677,20 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 	var idFieldColName string
 	var err error
 
+	hasProcessedCacheTag := false
+
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag
 
 		ormTagStr := tag.Get(engine.TagIdentifier)
+		if !hasProcessedCacheTag {
+			cacheTagStr := tag.Get("xorm_cache")
+			if cacheTagStr != "" {
+				hasProcessedCacheTag = true
+				engine.processCacherTag(table, v, cacheTagStr)
+			}
+		}
+
 		var col *core.Column
 		fieldValue := v.Field(i)
 		fieldType := fieldValue.Type()
@@ -1103,11 +1174,11 @@ func (engine *Engine) Sync2(beans ...interface{}) error {
 						}
 					}
 					if col.Default != oriCol.Default {
-						engine.LogWarn("Table %s Column %s db default is %s, struct default is %s",
+						engine.LogWarnf("Table %s Column %s db default is %s, struct default is %s",
 							table.Name, col.Name, oriCol.Default, col.Default)
 					}
 					if col.Nullable != oriCol.Nullable {
-						engine.LogWarn("Table %s Column %s db nullable is %v, struct nullable is %v",
+						engine.LogWarnf("Table %s Column %s db nullable is %v, struct nullable is %v",
 							table.Name, col.Name, oriCol.Nullable, col.Nullable)
 					}
 				} else {
