@@ -457,7 +457,7 @@ func (session *Session) scanMapIntoStruct(obj interface{}, objMap map[string][]b
 			fieldValue = dataStruct.FieldByName(fieldName)
 		}
 		if !fieldValue.IsValid() || !fieldValue.CanSet() {
-			session.Engine.LogWarn("table %v's column %v is not valid or cannot set",
+			session.Engine.LogWarnf("table %v's column %v is not valid or cannot set",
 				table.Name, key)
 			continue
 		}
@@ -1568,7 +1568,7 @@ func (session *Session) dropAll() error {
 func (session *Session) getField(dataStruct *reflect.Value, key string, table *core.Table, idx int) *reflect.Value {
 	var col *core.Column
 	if col = table.GetColumnIdx(key, idx); col == nil {
-		session.Engine.LogWarn(fmt.Sprintf("table %v has no column %v. %v", table.Name, key, table.ColumnsSeq()))
+		session.Engine.LogWarnf("table %v has no column %v. %v", table.Name, key, table.ColumnsSeq())
 		return nil
 	}
 
@@ -1579,7 +1579,7 @@ func (session *Session) getField(dataStruct *reflect.Value, key string, table *c
 	}
 
 	if !fieldValue.IsValid() || !fieldValue.CanSet() {
-		session.Engine.LogWarn("table %v's column %v is not valid or cannot set",
+		session.Engine.LogWarnf("table %v's column %v is not valid or cannot set",
 			table.Name, key)
 		return nil
 	}
@@ -1789,7 +1789,15 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 						if d, ok := vv.Interface().([]uint8); ok {
 							hasAssigned = true
 							t, err := session.byte2Time(col, d)
-							//fmt.Println(string(d), t, err)
+							if err != nil {
+								session.Engine.LogError("byte2Time error:", err.Error())
+								hasAssigned = false
+							} else {
+								fieldValue.Set(reflect.ValueOf(t).Convert(fieldType))
+							}
+						} else if d, ok := vv.Interface().(string); ok {
+							hasAssigned = true
+							t, err := session.str2Time(col, d)
 							if err != nil {
 								session.Engine.LogError("byte2Time error:", err.Error())
 								hasAssigned = false
@@ -2355,8 +2363,8 @@ func (session *Session) InsertMulti(rowsSlicePtr interface{}) (int64, error) {
 	}
 }
 
-func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.Time, outErr error) {
-	sdata := strings.TrimSpace(string(data))
+func (session *Session) str2Time(col *core.Column, data string) (outTime time.Time, outErr error) {
+	sdata := strings.TrimSpace(data)
 	var x time.Time
 	var err error
 
@@ -2421,6 +2429,10 @@ func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.T
 	}
 	outTime = x
 	return
+}
+
+func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.Time, outErr error) {
+	return session.str2Time(col, string(data))
 }
 
 // convert a db data([]byte) to a field value
@@ -4041,6 +4053,16 @@ func (session *Session) tbName(table *core.Table) string {
 	return tbName
 }
 
+// tbName get some table's table name
+func (session *Session) tbNameNoSchema(table *core.Table) string {
+	if len(session.Statement.AltTableName) > 0 {
+		return session.Statement.AltTableName
+	}
+
+	return table.Name
+}
+
+// Sync2
 func (s *Session) Sync2(beans ...interface{}) error {
 	engine := s.Engine
 
@@ -4055,7 +4077,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 		v := rValue(bean)
 		table := engine.mapType(v)
 		structTables = append(structTables, table)
-		var tbName = s.tbName(table)
+		var tbName = s.tbNameNoSchema(table)
 
 		var oriTable *core.Table
 		for _, tb := range tables {
@@ -4209,7 +4231,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 	for _, table := range tables {
 		var oriTable *core.Table
 		for _, structTable := range structTables {
-			if equalNoCase(table.Name, s.tbName(structTable)) {
+			if equalNoCase(table.Name, s.tbNameNoSchema(structTable)) {
 				oriTable = structTable
 				break
 			}

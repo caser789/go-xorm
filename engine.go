@@ -139,7 +139,8 @@ func (engine *Engine) quoteColumn(keyName string) string {
 	keyName = strings.Replace(keyName, "`", "", -1)
 	keyName = strings.Replace(keyName, engine.QuoteStr(), "", -1)
 
-	keyName = strings.Replace(keyName, ",", engine.dialect.QuoteStr()+","+engine.dialect.QuoteStr(), -1)
+    keyName = strings.Replace(keyName, ",", engine.dialect.QuoteStr()+","+engine.dialect.QuoteStr(), -1)
+    keyName = strings.Replace(keyName, ".", engine.dialect.QuoteStr()+"."+engine.dialect.QuoteStr(), -1)
 
 	return engine.dialect.QuoteStr() + keyName + engine.dialect.QuoteStr()
 }
@@ -967,23 +968,18 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 					continue
 				}
 				if strings.ToUpper(tags[0]) == "EXTENDS" {
-					if fieldValue.Kind() == reflect.Struct {
-						parentTable := engine.mapType(fieldValue)
-						for _, col := range parentTable.Columns() {
-							col.FieldName = fmt.Sprintf("%v.%v", t.Field(i).Name, col.FieldName)
-							table.AddColumn(col)
-						}
-
-						continue
-					} else if fieldValue.Kind() == reflect.Ptr {
+					switch fieldValue.Kind() {
+					case reflect.Ptr:
 						f := fieldValue.Type().Elem()
 						if f.Kind() == reflect.Struct {
+							fieldPtr := fieldValue
 							fieldValue = fieldValue.Elem()
-							if !fieldValue.IsValid() || fieldValue.IsNil() {
+							if !fieldValue.IsValid() || fieldPtr.IsNil() {
 								fieldValue = reflect.New(f).Elem()
 							}
 						}
-
+						fallthrough
+					case reflect.Struct:
 						parentTable := engine.mapType(fieldValue)
 						for _, col := range parentTable.Columns() {
 							col.FieldName = fmt.Sprintf("%v.%v", t.Field(i).Name, col.FieldName)
@@ -991,8 +987,9 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 						}
 
 						continue
+					default:
+						//TODO: warning
 					}
-					//TODO: warning
 				}
 
 				indexNames := make(map[string]int)
