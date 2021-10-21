@@ -1057,16 +1057,7 @@ func (session *Session) Get(bean interface{}) (bool, error) {
 	var err error
 	session.queryPreprocess(&sqlStr, args...)
 	if session.IsAutoCommit {
-		if session.prepareStmt {
-			stmt, errPrepare := session.doPrepare(sqlStr)
-			if errPrepare != nil {
-				return false, errPrepare
-			}
-			// defer stmt.Close() // !nashtsai! don't close due to stmt is cached and bounded to this session
-			rawRows, err = stmt.Query(args...)
-		} else {
-			rawRows, err = session.DB().Query(sqlStr, args...)
-		}
+		_, rawRows, err = session.innerQuery(sqlStr, args...)
 	} else {
 		rawRows, err = session.Tx.Query(sqlStr, args...)
 	}
@@ -1302,20 +1293,10 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 
 	if sliceValue.Kind() != reflect.Map {
 		var rawRows *core.Rows
-		var stmt *core.Stmt
 
 		session.queryPreprocess(&sqlStr, args...)
-
 		if session.IsAutoCommit {
-			if session.prepareStmt {
-				stmt, err = session.doPrepare(sqlStr)
-				if err != nil {
-					return err
-				}
-				rawRows, err = stmt.Query(args...)
-			} else {
-				rawRows, err = session.DB().Query(sqlStr, args...)
-			}
+			_, rawRows, err = session.innerQuery(sqlStr, args...)
 		} else {
 			rawRows, err = session.Tx.Query(sqlStr, args...)
 		}
@@ -2049,7 +2030,7 @@ func (session *Session) query(sqlStr string, paramStr ...interface{}) (resultsSl
 	session.queryPreprocess(&sqlStr, paramStr...)
 
 	if session.IsAutoCommit {
-		return session.innerQuery(sqlStr, paramStr...)
+		return session.innerQuery2(sqlStr, paramStr...)
 	}
 	return session.txQuery(session.Tx, sqlStr, paramStr...)
 }
@@ -2064,7 +2045,7 @@ func (session *Session) txQuery(tx *core.Tx, sqlStr string, params ...interface{
 	return rows2maps(rows)
 }
 
-func (session *Session) innerQuery(sqlStr string, params ...interface{}) ([]map[string][]byte, error) {
+func (session *Session) innerQuery(sqlStr string, params ...interface{}) (*core.Stmt, *core.Rows, error) {
 	var callback func() (*core.Stmt, *core.Rows, error)
 	if session.prepareStmt {
 		callback = func() (*core.Stmt, *core.Rows, error) {
@@ -2087,7 +2068,15 @@ func (session *Session) innerQuery(sqlStr string, params ...interface{}) ([]map[
 			return nil, rows, err
 		}
 	}
-	_, rows, err := session.Engine.logSQLQueryTime(sqlStr, params, callback)
+	stmt, rows, err := session.Engine.logSQLQueryTime(sqlStr, params, callback)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stmt, rows, nil
+}
+
+func (session *Session) innerQuery2(sqlStr string, params ...interface{}) ([]map[string][]byte, error) {
+	_, rows, err := session.innerQuery(sqlStr, params...)
 	if rows != nil {
 		defer rows.Close()
 	}
@@ -2296,10 +2285,8 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 	}
 	cleanupProcessorsClosures(&session.beforeClosures)
 
-	statement := fmt.Sprintf("INSERT INTO %v%v%v (%v%v%v) VALUES (%v)",
-		session.Engine.QuoteStr(),
-		session.Statement.TableName(),
-		session.Engine.QuoteStr(),
+	statement := fmt.Sprintf("INSERT INTO %s (%v%v%v) VALUES (%v)",
+		session.Engine.Quote(session.Statement.TableName()),
 		session.Engine.QuoteStr(),
 		strings.Join(colNames, session.Engine.QuoteStr()+", "+session.Engine.QuoteStr()),
 		session.Engine.QuoteStr(),
@@ -3171,10 +3158,8 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 		colPlaces = colPlaces[0 : len(colPlaces)-2]
 	}
 
-	sqlStr := fmt.Sprintf("INSERT INTO %v%v%v (%v%v%v) VALUES (%v)",
-		session.Engine.QuoteStr(),
-		session.Statement.TableName(),
-		session.Engine.QuoteStr(),
+	sqlStr := fmt.Sprintf("INSERT INTO %s (%v%v%v) VALUES (%v)",
+		session.Engine.Quote(session.Statement.TableName()),
 		session.Engine.QuoteStr(),
 		strings.Join(colNames, session.Engine.Quote(", ")),
 		session.Engine.QuoteStr(),
@@ -4098,7 +4083,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 								engine.dialect.DBType() == core.POSTGRES {
 								engine.LogInfof("Table %s column %s change type from %s to %s\n",
 									table.Name, col.Name, curType, expectedType)
-								_, err = engine.Exec(engine.dialect.ModifyColumnSql(table.Name, col))
+								_, err = engine.Exec(engine.dialect.ModifyColumnSql(engine.tbName(table), col))
 							} else {
 								engine.LogWarnf("Table %s column %s db type is %s, struct type is %s\n",
 									table.Name, col.Name, curType, expectedType)
@@ -4108,7 +4093,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 								if oriCol.Length < col.Length {
 									engine.LogInfof("Table %s column %s change type from varchar(%d) to varchar(%d)\n",
 										table.Name, col.Name, oriCol.Length, col.Length)
-									_, err = engine.Exec(engine.dialect.ModifyColumnSql(table.Name, col))
+									_, err = engine.Exec(engine.dialect.ModifyColumnSql(engine.tbName(table), col))
 								}
 							}
 						} else {
@@ -4120,7 +4105,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 							if oriCol.Length < col.Length {
 								engine.LogInfof("Table %s column %s change type from varchar(%d) to varchar(%d)\n",
 									table.Name, col.Name, oriCol.Length, col.Length)
-								_, err = engine.Exec(engine.dialect.ModifyColumnSql(table.Name, col))
+								_, err = engine.Exec(engine.dialect.ModifyColumnSql(engine.tbName(table), col))
 							}
 						}
 					}
@@ -4187,12 +4172,12 @@ func (s *Session) Sync2(beans ...interface{}) error {
 					session := engine.NewSession()
 					session.Statement.RefTable = table
 					defer session.Close()
-					err = session.addUnique(table.Name, name)
+					err = session.addUnique(engine.tbName(table), name)
 				} else if index.Type == core.IndexType {
 					session := engine.NewSession()
 					session.Statement.RefTable = table
 					defer session.Close()
-					err = session.addIndex(table.Name, name)
+					err = session.addIndex(engine.tbName(table), name)
 				}
 				if err != nil {
 					return err
