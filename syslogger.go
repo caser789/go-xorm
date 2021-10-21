@@ -1,4 +1,9 @@
+// Copyright 2015 The Xorm Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // +build !windows,!nacl,!plan9
+
 package xorm
 
 import (
@@ -8,8 +13,11 @@ import (
 	"github.com/go-xorm/core"
 )
 
+var _ core.ILogger = &SyslogLogger{}
+
 type SyslogLogger struct {
-	w *syslog.Writer
+	w       *syslog.Writer
+	showSQL bool
 }
 
 func NewSyslogLogger(w *syslog.Writer) *SyslogLogger {
@@ -55,4 +63,16 @@ func (s *SyslogLogger) Level() core.LogLevel {
 // SetLevel always return error, as current log/syslog package doesn't allow to set priority level after syslog.Writer created
 func (s *SyslogLogger) SetLevel(l core.LogLevel) (err error) {
 	return fmt.Errorf("unable to set syslog level")
+}
+
+func (s *SyslogLogger) ShowSQL(show ...bool) {
+	if len(show) == 0 {
+		s.showSQL = true
+		return
+	}
+	s.showSQL = show[0]
+}
+
+func (s *SyslogLogger) IsShowSQL() bool {
+	return s.showSQL
 }
