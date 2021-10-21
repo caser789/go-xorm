@@ -1203,8 +1203,8 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 		table = session.Statement.RefTable
 	}
 
+	var addedTableName = (len(session.Statement.JoinStr) > 0)
 	if len(condiBean) > 0 {
-		var addedTableName = (len(session.Statement.JoinStr) > 0)
 		colNames, args := buildConditions(session.Engine, table, condiBean[0], true, true,
 			false, true, session.Statement.allUseBool, session.Statement.useAllCols,
 			session.Statement.unscoped, session.Statement.mustColumnMap,
@@ -1215,8 +1215,12 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 		// !oinume! Add "<col> IS NULL" to WHERE whatever condiBean is given.
 		// See https://github.com/go-xorm/xorm/issues/179
 		if col := table.DeletedColumn(); col != nil && !session.Statement.unscoped { // tag "deleted" is enabled
+			var colName string = session.Engine.Quote(col.Name)
+			if addedTableName {
+				colName = session.Engine.Quote(session.Statement.TableName()) + "." + colName
+			}
 			session.Statement.ConditionStr = fmt.Sprintf("(%v IS NULL or %v = '0001-01-01 00:00:00') ",
-				session.Engine.Quote(col.Name), session.Engine.Quote(col.Name))
+				colName, colName)
 		}
 	}
 
@@ -2144,7 +2148,9 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 	cols := make([]*core.Column, 0)
 
 	for i := 0; i < size; i++ {
-		elemValue := sliceValue.Index(i).Interface()
+		v := sliceValue.Index(i)
+		vv := reflect.Indirect(v)
+		elemValue := v.Interface()
 		colPlaces := make([]string, 0)
 
 		// handle BeforeInsertProcessor
@@ -2160,7 +2166,11 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 
 		if i == 0 {
 			for _, col := range table.Columns() {
-				fieldValue := reflect.Indirect(reflect.ValueOf(elemValue)).FieldByName(col.FieldName)
+				ptrFieldValue, err := col.ValueOfV(&vv)
+				if err != nil {
+					return 0, err
+				}
+				fieldValue := *ptrFieldValue
 				if col.IsAutoIncrement && fieldValue.Int() == 0 {
 					continue
 				}
@@ -2203,7 +2213,12 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 			}
 		} else {
 			for _, col := range cols {
-				fieldValue := reflect.Indirect(reflect.ValueOf(elemValue)).FieldByName(col.FieldName)
+				ptrFieldValue, err := col.ValueOfV(&vv)
+				if err != nil {
+					return 0, err
+				}
+				fieldValue := *ptrFieldValue
+
 				if col.IsAutoIncrement && fieldValue.Int() == 0 {
 					continue
 				}
@@ -2267,7 +2282,8 @@ func (session *Session) innerInsertMulti(rowsSlicePtr interface{}) (int64, error
 
 	lenAfterClosures := len(session.afterClosures)
 	for i := 0; i < size; i++ {
-		elemValue := sliceValue.Index(i).Interface()
+		elemValue := reflect.Indirect(sliceValue.Index(i)).Addr().Interface()
+
 		// handle AfterInsertProcessor
 		if session.IsAutoCommit {
 			// !nashtsai! does user expect it's same slice to passed closure when using Before()/After() when insert multi??
@@ -3012,11 +3028,11 @@ func (session *Session) value2Interface(col *core.Column, fieldValue reflect.Val
 
 			fieldTable := session.Engine.autoMapType(fieldValue)
 			//if fieldTable, ok := session.Engine.Tables[fieldValue.Type()]; ok {
-				if len(fieldTable.PrimaryKeys) == 1 {
-					pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumns()[0].FieldName)
-					return pkField.Interface(), nil
-				}
-				return 0, fmt.Errorf("no primary key for col %v", col.Name)
+			if len(fieldTable.PrimaryKeys) == 1 {
+				pkField := reflect.Indirect(fieldValue).FieldByName(fieldTable.PKColumns()[0].FieldName)
+				return pkField.Interface(), nil
+			}
+			return 0, fmt.Errorf("no primary key for col %v", col.Name)
 			//}
 		}
 
@@ -3320,10 +3336,14 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 
 		var v interface{} = id
 		switch aiValue.Type().Kind() {
+		case reflect.Int16:
+			v = int16(id)
 		case reflect.Int32:
 			v = int32(id)
 		case reflect.Int:
 			v = int(id)
+		case reflect.Uint16:
+			v = uint16(id)
 		case reflect.Uint32:
 			v = uint32(id)
 		case reflect.Uint64:
