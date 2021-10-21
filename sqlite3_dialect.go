@@ -264,10 +264,8 @@ func (db *sqlite3) ForUpdateSql(query string) string {
 func (db *sqlite3) IsColumnExist(tableName, colName string) (bool, error) {
 	args := []interface{}{tableName}
 	query := "SELECT name FROM sqlite_master WHERE type='table' and name = ? and ((sql like '%`" + colName + "`%') or (sql like '%[" + colName + "]%'))"
+	db.LogSQL(query, args)
 	rows, err := db.DB().Query(query, args...)
-	if db.Logger != nil {
-		db.Logger.Info("[sql]", query, args)
-	}
 	if err != nil {
 		return false, err
 	}
@@ -282,11 +280,8 @@ func (db *sqlite3) IsColumnExist(tableName, colName string) (bool, error) {
 func (db *sqlite3) GetColumns(tableName string) ([]string, map[string]*core.Column, error) {
 	args := []interface{}{tableName}
 	s := "SELECT sql FROM sqlite_master WHERE type='table' and name = ?"
-
+	db.LogSQL(s, args)
 	rows, err := db.DB().Query(s, args...)
-	if db.Logger != nil {
-		db.Logger.Info("[sql]", s, args)
-	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -307,7 +302,7 @@ func (db *sqlite3) GetColumns(tableName string) ([]string, map[string]*core.Colu
 
 	nStart := strings.Index(name, "(")
 	nEnd := strings.LastIndex(name, ")")
-	reg := regexp.MustCompile(`\w[\w\s]*(\([^\(]*\))?`)
+	reg := regexp.MustCompile(`[^\(,\)]*(\([^\(]*\))?`)
 	colCreates := reg.FindAllString(name[nStart+1:nEnd], -1)
 	cols := make(map[string]*core.Column)
 	colSeq := make([]string, 0)
@@ -354,11 +349,9 @@ func (db *sqlite3) GetColumns(tableName string) ([]string, map[string]*core.Colu
 func (db *sqlite3) GetTables() ([]*core.Table, error) {
 	args := []interface{}{}
 	s := "SELECT name FROM sqlite_master WHERE type='table'"
+	db.LogSQL(s, args)
 
 	rows, err := db.DB().Query(s, args...)
-	if db.Logger != nil {
-		db.Logger.Info("[sql]", s, args)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -382,11 +375,9 @@ func (db *sqlite3) GetTables() ([]*core.Table, error) {
 func (db *sqlite3) GetIndexes(tableName string) (map[string]*core.Index, error) {
 	args := []interface{}{tableName}
 	s := "SELECT sql FROM sqlite_master WHERE type='index' and tbl_name = ?"
+	db.LogSQL(s, args)
 
 	rows, err := db.DB().Query(s, args...)
-	if db.Logger != nil {
-		db.Logger.Info("[sql]", s, args)
-	}
 	if err != nil {
 		return nil, err
 	}

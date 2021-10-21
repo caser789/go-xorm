@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version string = "0.4.3.0526"
+	Version string = "0.5.0.0216"
 )
 
 func regDrvsNDialects() bool {
@@ -39,7 +39,7 @@ func regDrvsNDialects() bool {
 	for driverName, v := range providedDrvsNDialects {
 		if driver := core.QueryDriver(driverName); driver == nil {
 			core.RegisterDriver(driverName, v.getDriver())
-            core.RegisterDialect(v.dbType, v.getDialect)
+			core.RegisterDialect(v.dbType, v.getDialect)
 		}
 	}
 	return true
@@ -84,12 +84,10 @@ func NewEngine(driverName string, dataSourceName string) (*Engine, error) {
 		Tables:        make(map[reflect.Type]*core.Table),
 		mutex:         &sync.RWMutex{},
 		TagIdentifier: "xorm",
-		Logger:        NewSimpleLogger(os.Stdout),
 		TZLocation:    time.Local,
 	}
 
-	engine.dialect.SetLogger(engine.Logger)
-
+	engine.SetLogger(NewSimpleLogger(os.Stdout))
 	engine.SetMapper(core.NewCacheMapper(new(core.SnakeMapper)))
 
 	runtime.SetFinalizer(engine, close)

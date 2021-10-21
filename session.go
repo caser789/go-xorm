@@ -496,9 +496,9 @@ func (session *Session) exec(sqlStr string, args ...interface{}) (sql.Result, er
 
 	session.saveLastSQL(sqlStr, args...)
 
-	return session.Engine.LogSQLExecutionTime(sqlStr, args, func() (sql.Result, error) {
+	return session.Engine.logSQLExecutionTime(sqlStr, args, func() (sql.Result, error) {
 		if session.IsAutoCommit {
-			//oci8 can not auto commit (github.com/mattn/go-oci8)
+			// FIXME: oci8 can not auto commit (github.com/mattn/go-oci8)
 			if session.Engine.dialect.DBType() == core.ORACLE {
 				session.Begin()
 				r, err := session.Tx.Exec(sqlStr, args...)
@@ -573,7 +573,6 @@ func (session *Session) CreateUniques(bean interface{}) error {
 
 func (session *Session) createOneTable() error {
 	sqlStr := session.Statement.genCreateTableSQL()
-	session.Engine.LogDebug("create table sql: [", sqlStr, "]")
 	_, err := session.exec(sqlStr)
 	return err
 }
@@ -2100,7 +2099,7 @@ func (session *Session) innerQuery(sqlStr string, params ...interface{}) ([]map[
 			return nil, rows, err
 		}
 	}
-	_, rows, err := session.Engine.LogSQLQueryTime(sqlStr, params, callback)
+	_, rows, err := session.Engine.logSQLQueryTime(sqlStr, params, callback)
 	if rows != nil {
 		defer rows.Close()
 	}
@@ -3962,7 +3961,27 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 			condition)
 
 		if len(orderSql) > 0 {
-			realSql += orderSql
+			switch session.Engine.dialect.DBType() {
+			case core.POSTGRES:
+				inSql := fmt.Sprintf("ctid IN (SELECT ctid FROM %s%s)", tableName, orderSql)
+				if len(condition) > 0 {
+					realSql += " AND " + inSql
+				} else {
+					realSql += " WHERE " + inSql
+				}
+			case core.SQLITE:
+				inSql := fmt.Sprintf("rowid IN (SELECT rowid FROM %s%s)", tableName, orderSql)
+				if len(condition) > 0 {
+					realSql += " AND " + inSql
+				} else {
+					realSql += " WHERE " + inSql
+				}
+			// TODO: how to handle delete limit on mssql?
+			case core.MSSQL:
+				return 0, ErrNotImplemented
+			default:
+				realSql += orderSql
+			}
 		}
 
 		// !oinume! Insert NowTime to the head of session.Statement.Params
