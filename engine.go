@@ -320,6 +320,12 @@ func (engine *Engine) NoAutoTime() *Session {
 	return session.NoAutoTime()
 }
 
+func (engine *Engine) NoAutoCondition(no ...bool) *Session {
+	session := engine.NewSession()
+	session.IsAutoClose = true
+	return session.NoAutoCondition(no...)
+}
+
 // Retrieve all tables, columns, indexes' informations from database.
 func (engine *Engine) DBMetas() ([]*core.Table, error) {
 	tables, err := engine.dialect.GetTables()
@@ -759,7 +765,7 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 		if ormTagStr != "" {
 			col = &core.Column{FieldName: t.Field(i).Name, Nullable: true, IsPrimaryKey: false,
 				IsAutoIncrement: false, MapType: core.TWOSIDES, Indexes: make(map[string]bool)}
-			tags := strings.Split(ormTagStr, " ")
+			tags := splitTag(ormTagStr)
 
 			if len(tags) > 0 {
 				if tags[0] == "-" {
