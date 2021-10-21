@@ -49,6 +49,7 @@ type Session struct {
 	cascadeDeep int
 
 	// !evalphobia! stored the last executed query on this session
+	//beforeSQLExec func(string, ...interface{})
 	lastSQL     string
 	lastSQLArgs []interface{}
 }
@@ -1225,10 +1226,7 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 
 	var addedTableName = (len(session.Statement.JoinStr) > 0)
 	if !session.Statement.noAutoCondition && len(condiBean) > 0 {
-		colNames, args := buildConditions(session.Engine, table, condiBean[0], true, true,
-			false, true, session.Statement.allUseBool, session.Statement.useAllCols,
-			session.Statement.unscoped, session.Statement.mustColumnMap,
-			session.Statement.TableName(), addedTableName)
+		colNames, args := session.Statement.buildConditions(table, condiBean[0], true, true, false, true, addedTableName)
 		session.Statement.ConditionStr = strings.Join(colNames, " AND ")
 		session.Statement.BeanArgs = args
 	} else {
@@ -1237,9 +1235,13 @@ func (session *Session) Find(rowsSlicePtr interface{}, condiBean ...interface{})
 		if col := table.DeletedColumn(); col != nil && !session.Statement.unscoped { // tag "deleted" is enabled
 			var colName string = session.Engine.Quote(col.Name)
 			if addedTableName {
-				colName = session.Engine.Quote(session.Statement.TableName()) + "." + colName
+				var nm = session.Statement.TableName()
+				if len(session.Statement.TableAlias) > 0 {
+					nm = session.Statement.TableAlias
+				}
+				colName = session.Engine.Quote(nm) + "." + colName
 			}
-			session.Statement.ConditionStr = fmt.Sprintf("(%v IS NULL or %v = '0001-01-01 00:00:00') ",
+			session.Statement.ConditionStr = fmt.Sprintf("%v IS NULL OR %v = '0001-01-01 00:00:00'",
 				colName, colName)
 		}
 	}
@@ -1790,7 +1792,11 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 								t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 						}
 						// !nashtsai! convert to engine location
-						t = t.In(session.Engine.TZLocation)
+						if col.TimeZone == nil {
+							t = t.In(session.Engine.TZLocation)
+						} else {
+							t = t.In(col.TimeZone)
+						}
 						fieldValue.Set(reflect.ValueOf(t).Convert(fieldType))
 
 						// t = fieldValue.Interface().(time.Time)
@@ -1799,7 +1805,13 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 					} else if rawValueType == core.IntType || rawValueType == core.Int64Type ||
 						rawValueType == core.Int32Type {
 						hasAssigned = true
-						t := time.Unix(vv.Int(), 0).In(session.Engine.TZLocation)
+						var tz *time.Location
+						if col.TimeZone == nil {
+							tz = session.Engine.TZLocation
+						} else {
+							tz = col.TimeZone
+						}
+						t := time.Unix(vv.Int(), 0).In(tz)
 						//vv = reflect.ValueOf(t)
 						fieldValue.Set(reflect.ValueOf(t).Convert(fieldType))
 					} else {
@@ -2380,10 +2392,12 @@ func (session *Session) byte2Time(col *core.Column, data []byte) (outTime time.T
 			x = time.Unix(sd, 0)
 			// !nashtsai! HACK mymysql driver is casuing Local location being change to CHAT and cause wrong time conversion
 			//fmt.Println(x.In(session.Engine.TZLocation), "===")
-			x = x.In(session.Engine.TZLocation)
+			if col.TimeZone == nil {
+				x = x.In(session.Engine.TZLocation)
+			} else {
+				x = x.In(col.TimeZone)
+			}
 			//fmt.Println(x, "=====")
-			/*x = time.Date(x.Year(), x.Month(), x.Day(), x.Hour(),
-			x.Minute(), x.Second(), x.Nanosecond(), session.Engine.TZLocation)*/
 			session.Engine.LogDebugf("time(0) key[%v]: %+v | sdata: [%v]\n", col.FieldName, x, sdata)
 		} else {
 			session.Engine.LogDebugf("time(0) err key[%v]: %+v | sdata: [%v]\n", col.FieldName, x, sdata)
@@ -3641,9 +3655,7 @@ func (session *Session) Update(bean interface{}, condiBean ...interface{}) (int6
 	var condiArgs []interface{}
 
 	if !session.Statement.noAutoCondition && len(condiBean) > 0 {
-		condiColNames, condiArgs = buildConditions(session.Engine, session.Statement.RefTable, condiBean[0], true, true,
-			false, true, session.Statement.allUseBool, session.Statement.useAllCols,
-			session.Statement.unscoped, session.Statement.mustColumnMap, session.Statement.TableName(), false)
+		condiColNames, condiArgs = session.Statement.buildConditions(session.Statement.RefTable, condiBean[0], true, true, false, true, false)
 	}
 
 	var condition = ""
@@ -3866,10 +3878,7 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	var args []interface{}
 
 	if !session.Statement.noAutoCondition {
-		colNames, args = buildConditions(session.Engine, table, bean, true, true,
-			false, true, session.Statement.allUseBool, session.Statement.useAllCols,
-			session.Statement.unscoped, session.Statement.mustColumnMap,
-			session.Statement.TableName(), false)
+		colNames, args = session.Statement.buildConditions(table, bean, true, true, false, true, false)
 	}
 	var condition = ""
 	var andStr = session.Engine.dialect.AndStr()
@@ -3891,31 +3900,70 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 		condition += inSql
 		args = append(args, inArgs...)
 	}
-	if len(condition) == 0 {
+	if len(condition) == 0 && session.Statement.LimitN == 0 {
 		return 0, ErrNeedDeletedCond
 	}
 
-	sqlStr, sqlStrForCache := "", ""
+	var deleteSql, realSql string
+	var tableName = session.Engine.Quote(session.Statement.TableName())
+
+	if len(condition) > 0 {
+		deleteSql = fmt.Sprintf("DELETE FROM %v WHERE %v", tableName, condition)
+	} else {
+		deleteSql = fmt.Sprintf("DELETE FROM %v", tableName)
+	}
+
+	var orderSql string
+	if len(session.Statement.OrderStr) > 0 {
+		orderSql += fmt.Sprintf(" ORDER BY %s", session.Statement.OrderStr)
+	}
+	if session.Statement.LimitN > 0 {
+		orderSql += fmt.Sprintf(" LIMIT %d", session.Statement.LimitN)
+	}
+
+	if len(orderSql) > 0 {
+		switch session.Engine.dialect.DBType() {
+		case core.POSTGRES:
+			inSql := fmt.Sprintf("ctid IN (SELECT ctid FROM %s%s)", tableName, orderSql)
+			if len(condition) > 0 {
+				deleteSql += " AND " + inSql
+			} else {
+				deleteSql += " WHERE " + inSql
+			}
+		case core.SQLITE:
+			inSql := fmt.Sprintf("rowid IN (SELECT rowid FROM %s%s)", tableName, orderSql)
+			if len(condition) > 0 {
+				deleteSql += " AND " + inSql
+			} else {
+				deleteSql += " WHERE " + inSql
+			}
+		// TODO: how to handle delete limit on mssql?
+		case core.MSSQL:
+			return 0, ErrNotImplemented
+		default:
+			deleteSql += orderSql
+		}
+	}
+
 	argsForCache := make([]interface{}, 0, len(args)*2)
 	if session.Statement.unscoped || table.DeletedColumn() == nil { // tag "deleted" is disabled
-		sqlStr = fmt.Sprintf("DELETE FROM %v WHERE %v",
-			session.Engine.Quote(session.Statement.TableName()), condition)
-
-		sqlStrForCache = sqlStr
+		realSql = deleteSql
 		copy(argsForCache, args)
 		argsForCache = append(session.Statement.Params, argsForCache...)
 	} else {
 		// !oinume! sqlStrForCache and argsForCache is needed to behave as executing "DELETE FROM ..." for cache.
-		sqlStrForCache = fmt.Sprintf("DELETE FROM %v WHERE %v",
-			session.Engine.Quote(session.Statement.TableName()), condition)
 		copy(argsForCache, args)
 		argsForCache = append(session.Statement.Params, argsForCache...)
 
 		deletedColumn := table.DeletedColumn()
-		sqlStr = fmt.Sprintf("UPDATE %v SET %v = ? WHERE %v",
+		realSql = fmt.Sprintf("UPDATE %v SET %v = ? WHERE %v",
 			session.Engine.Quote(session.Statement.TableName()),
 			session.Engine.Quote(deletedColumn.Name),
 			condition)
+
+		if len(orderSql) > 0 {
+			realSql += orderSql
+		}
 
 		// !oinume! Insert NowTime to the head of session.Statement.Params
 		session.Statement.Params = append(session.Statement.Params, "")
@@ -3935,10 +3983,10 @@ func (session *Session) Delete(bean interface{}) (int64, error) {
 	args = append(session.Statement.Params, args...)
 
 	if cacher := session.Engine.getCacher2(session.Statement.RefTable); cacher != nil && session.Statement.UseCache {
-		session.cacheDelete(sqlStrForCache, argsForCache...)
+		session.cacheDelete(deleteSql, argsForCache...)
 	}
 
-	res, err := session.exec(sqlStr, args...)
+	res, err := session.exec(realSql, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -4001,7 +4049,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 
 		var oriTable *core.Table
 		for _, tb := range tables {
-			if tb.Name == table.Name {
+			if equalNoCase(tb.Name, table.Name) {
 				oriTable = tb
 				break
 			}
@@ -4026,7 +4074,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 			for _, col := range table.Columns() {
 				var oriCol *core.Column
 				for _, col2 := range oriTable.Columns() {
-					if col.Name == col2.Name {
+					if equalNoCase(col.Name, col2.Name) {
 						oriCol = col2
 						break
 					}
@@ -4149,7 +4197,7 @@ func (s *Session) Sync2(beans ...interface{}) error {
 	for _, table := range tables {
 		var oriTable *core.Table
 		for _, structTable := range structTables {
-			if table.Name == structTable.Name {
+			if equalNoCase(table.Name, structTable.Name) {
 				oriTable = structTable
 				break
 			}
