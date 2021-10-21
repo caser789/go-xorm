@@ -649,39 +649,6 @@ func (session *Session) DropTable(beanOrTableName interface{}) error {
 	return nil
 }
 
-func (statement *Statement) JoinColumns(cols []*core.Column, includeTableName bool) string {
-	var colnames = make([]string, len(cols))
-	for i, col := range cols {
-		if includeTableName {
-			colnames[i] = statement.Engine.Quote(statement.TableName()) +
-				"." + statement.Engine.Quote(col.Name)
-		} else {
-			colnames[i] = statement.Engine.Quote(col.Name)
-		}
-	}
-	return strings.Join(colnames, ", ")
-}
-
-func (statement *Statement) convertIdSql(sqlStr string) string {
-	if statement.RefTable != nil {
-		cols := statement.RefTable.PKColumns()
-		if len(cols) == 0 {
-			return ""
-		}
-
-		colstrs := statement.JoinColumns(cols, false)
-		sqls := splitNNoCase(sqlStr, " from ", 2)
-		if len(sqls) != 2 {
-			return ""
-		}
-		if statement.Engine.dialect.DBType() == "ql" {
-			return fmt.Sprintf("SELECT id() FROM %v", sqls[1])
-		}
-		return fmt.Sprintf("SELECT %s FROM %v", colstrs, sqls[1])
-	}
-	return ""
-}
-
 func (session *Session) canCache() bool {
 	if session.Statement.RefTable == nil ||
 		session.Statement.JoinStr != "" ||
@@ -1596,7 +1563,7 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 		if fieldValue := session.getField(dataStruct, key, table, idx); fieldValue != nil {
 			rawValue := reflect.Indirect(reflect.ValueOf(scanResults[ii]))
 
-			//if row is null then ignore
+			// if row is null then ignore
 			if rawValue.Interface() == nil {
 				continue
 			}
@@ -1635,28 +1602,30 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 				var bs []byte
 				if rawValueType.Kind() == reflect.String {
 					bs = []byte(vv.String())
-				} else if rawValueType.ConvertibleTo(reflect.SliceOf(reflect.TypeOf(uint8(1)))) {
+				} else if rawValueType.ConvertibleTo(core.BytesType) {
 					bs = vv.Bytes()
 				} else {
-					return errors.New("unsupported database data type")
+					return fmt.Errorf("unsupported database data type: %s %v", key, rawValueType.Kind())
 				}
 
 				hasAssigned = true
 
-				if fieldValue.CanAddr() {
-					err := json.Unmarshal(bs, fieldValue.Addr().Interface())
-					if err != nil {
-						session.Engine.logger.Error(err)
-						return err
+				if len(bs) > 0 {
+					if fieldValue.CanAddr() {
+						err := json.Unmarshal(bs, fieldValue.Addr().Interface())
+						if err != nil {
+							session.Engine.logger.Error(key, err)
+							return err
+						}
+					} else {
+						x := reflect.New(fieldType)
+						err := json.Unmarshal(bs, x.Interface())
+						if err != nil {
+							session.Engine.logger.Error(key, err)
+							return err
+						}
+						fieldValue.Set(x.Elem())
 					}
-				} else {
-					x := reflect.New(fieldType)
-					err := json.Unmarshal(bs, x.Interface())
-					if err != nil {
-						session.Engine.logger.Error(err)
-						return err
-					}
-					fieldValue.Set(x.Elem())
 				}
 
 				continue
@@ -1668,25 +1637,27 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 				var bs []byte
 				if rawValueType.Kind() == reflect.String {
 					bs = []byte(vv.String())
-				} else if rawValueType.Kind() == reflect.Slice {
+				} else if rawValueType.ConvertibleTo(core.BytesType) {
 					bs = vv.Bytes()
 				}
 
 				hasAssigned = true
-				if fieldValue.CanAddr() {
-					err := json.Unmarshal(bs, fieldValue.Addr().Interface())
-					if err != nil {
-						session.Engine.logger.Error(err)
-						return err
+				if len(bs) > 0 {
+					if fieldValue.CanAddr() {
+						err := json.Unmarshal(bs, fieldValue.Addr().Interface())
+						if err != nil {
+							session.Engine.logger.Error(err)
+							return err
+						}
+					} else {
+						x := reflect.New(fieldType)
+						err := json.Unmarshal(bs, x.Interface())
+						if err != nil {
+							session.Engine.logger.Error(err)
+							return err
+						}
+						fieldValue.Set(x.Elem())
 					}
-				} else {
-					x := reflect.New(fieldType)
-					err := json.Unmarshal(bs, x.Interface())
-					if err != nil {
-						session.Engine.logger.Error(err)
-						return err
-					}
-					fieldValue.Set(x.Elem())
 				}
 			case reflect.Slice, reflect.Array:
 				switch rawValueType.Kind() {
@@ -1800,21 +1771,25 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 					if rawValueType.Kind() == reflect.String {
 						hasAssigned = true
 						x := reflect.New(fieldType)
-						err := json.Unmarshal([]byte(vv.String()), x.Interface())
-						if err != nil {
-							session.Engine.logger.Error(err)
-							return err
+						if len([]byte(vv.String())) > 0 {
+							err := json.Unmarshal([]byte(vv.String()), x.Interface())
+							if err != nil {
+								session.Engine.logger.Error(err)
+								return err
+							}
+							fieldValue.Set(x.Elem())
 						}
-						fieldValue.Set(x.Elem())
 					} else if rawValueType.Kind() == reflect.Slice {
 						hasAssigned = true
 						x := reflect.New(fieldType)
-						err := json.Unmarshal(vv.Bytes(), x.Interface())
-						if err != nil {
-							session.Engine.logger.Error(err)
-							return err
+						if len(vv.Bytes()) > 0 {
+							err := json.Unmarshal(vv.Bytes(), x.Interface())
+							if err != nil {
+								session.Engine.logger.Error(err)
+								return err
+							}
+							fieldValue.Set(x.Elem())
 						}
-						fieldValue.Set(x.Elem())
 					}
 				} else if session.Statement.UseCascade {
 					table := session.Engine.autoMapType(*fieldValue)
@@ -1972,20 +1947,24 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 					}
 				case core.Complex64Type:
 					var x complex64
-					err := json.Unmarshal([]byte(vv.String()), &x)
-					if err != nil {
-						session.Engine.logger.Error(err)
-					} else {
-						fieldValue.Set(reflect.ValueOf(&x))
+					if len([]byte(vv.String())) > 0 {
+						err := json.Unmarshal([]byte(vv.String()), &x)
+						if err != nil {
+							session.Engine.logger.Error(err)
+						} else {
+							fieldValue.Set(reflect.ValueOf(&x))
+						}
 					}
 					hasAssigned = true
 				case core.Complex128Type:
 					var x complex128
-					err := json.Unmarshal([]byte(vv.String()), &x)
-					if err != nil {
-						session.Engine.logger.Error(err)
-					} else {
-						fieldValue.Set(reflect.ValueOf(&x))
+					if len([]byte(vv.String())) > 0 {
+						err := json.Unmarshal([]byte(vv.String()), &x)
+						if err != nil {
+							session.Engine.logger.Error(err)
+						} else {
+							fieldValue.Set(reflect.ValueOf(&x))
+						}
 					}
 					hasAssigned = true
 				} // switch fieldType
@@ -2430,36 +2409,41 @@ func (session *Session) bytes2Value(col *core.Column, fieldValue *reflect.Value,
 	switch fieldType.Kind() {
 	case reflect.Complex64, reflect.Complex128:
 		x := reflect.New(fieldType)
-
-		err := json.Unmarshal(data, x.Interface())
-		if err != nil {
-			session.Engine.logger.Error(err)
-			return err
-		}
-		fieldValue.Set(x.Elem())
-	case reflect.Slice, reflect.Array, reflect.Map:
-		v = data
-		t := fieldType.Elem()
-		k := t.Kind()
-		if col.SQLType.IsText() {
-			x := reflect.New(fieldType)
+		if len(data) > 0 {
 			err := json.Unmarshal(data, x.Interface())
 			if err != nil {
 				session.Engine.logger.Error(err)
 				return err
 			}
 			fieldValue.Set(x.Elem())
-		} else if col.SQLType.IsBlob() {
-			if k == reflect.Uint8 {
-				fieldValue.Set(reflect.ValueOf(v))
-			} else {
-				x := reflect.New(fieldType)
+		}
+	case reflect.Slice, reflect.Array, reflect.Map:
+		v = data
+		t := fieldType.Elem()
+		k := t.Kind()
+		if col.SQLType.IsText() {
+			x := reflect.New(fieldType)
+			if len(data) > 0 {
 				err := json.Unmarshal(data, x.Interface())
 				if err != nil {
 					session.Engine.logger.Error(err)
 					return err
 				}
 				fieldValue.Set(x.Elem())
+			}
+		} else if col.SQLType.IsBlob() {
+			if k == reflect.Uint8 {
+				fieldValue.Set(reflect.ValueOf(v))
+			} else {
+				x := reflect.New(fieldType)
+				if len(data) > 0 {
+					err := json.Unmarshal(data, x.Interface())
+					if err != nil {
+						session.Engine.logger.Error(err)
+						return err
+					}
+					fieldValue.Set(x.Elem())
+				}
 			}
 		} else {
 			return ErrUnSupportedType
@@ -2584,21 +2568,25 @@ func (session *Session) bytes2Value(col *core.Column, fieldValue *reflect.Value,
 		// case "*complex64":
 		case core.Complex64Type.Kind():
 			var x complex64
-			err := json.Unmarshal(data, &x)
-			if err != nil {
-				session.Engine.logger.Error(err)
-				return err
+			if len(data) > 0 {
+				err := json.Unmarshal(data, &x)
+				if err != nil {
+					session.Engine.logger.Error(err)
+					return err
+				}
+				fieldValue.Set(reflect.ValueOf(&x).Convert(fieldType))
 			}
-			fieldValue.Set(reflect.ValueOf(&x).Convert(fieldType))
 		// case "*complex128":
 		case core.Complex128Type.Kind():
 			var x complex128
-			err := json.Unmarshal(data, &x)
-			if err != nil {
-				session.Engine.logger.Error(err)
-				return err
+			if len(data) > 0 {
+				err := json.Unmarshal(data, &x)
+				if err != nil {
+					session.Engine.logger.Error(err)
+					return err
+				}
+				fieldValue.Set(reflect.ValueOf(&x).Convert(fieldType))
 			}
-			fieldValue.Set(reflect.ValueOf(&x).Convert(fieldType))
 		// case "*float64":
 		case core.Float64Type.Kind():
 			x, err := strconv.ParseFloat(string(data), 64)
@@ -3205,47 +3193,6 @@ func (session *Session) InsertOne(bean interface{}) (int64, error) {
 	}
 
 	return session.innerInsert(bean)
-}
-
-func (statement *Statement) convertUpdateSQL(sqlStr string) (string, string) {
-	if statement.RefTable == nil || len(statement.RefTable.PrimaryKeys) != 1 {
-		return "", ""
-	}
-
-	colstrs := statement.JoinColumns(statement.RefTable.PKColumns(), true)
-	sqls := splitNNoCase(sqlStr, "where", 2)
-	if len(sqls) != 2 {
-		if len(sqls) == 1 {
-			return sqls[0], fmt.Sprintf("SELECT %v FROM %v",
-				colstrs, statement.Engine.Quote(statement.TableName()))
-		}
-		return "", ""
-	}
-
-	var whereStr = sqls[1]
-
-	//TODO: for postgres only, if any other database?
-	var paraStr string
-	if statement.Engine.dialect.DBType() == core.POSTGRES {
-		paraStr = "$"
-	} else if statement.Engine.dialect.DBType() == core.MSSQL {
-		paraStr = ":"
-	}
-
-	if paraStr != "" {
-		if strings.Contains(sqls[1], paraStr) {
-			dollers := strings.Split(sqls[1], paraStr)
-			whereStr = dollers[0]
-			for i, c := range dollers[1:] {
-				ccs := strings.SplitN(c, " ", 2)
-				whereStr += fmt.Sprintf(paraStr+"%v %v", i+1, ccs[1])
-			}
-		}
-	}
-
-	return sqls[0], fmt.Sprintf("SELECT %v FROM %v WHERE %v",
-		colstrs, statement.Engine.Quote(statement.TableName()),
-		whereStr)
 }
 
 func (session *Session) cacheInsert(tables ...string) error {
