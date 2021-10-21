@@ -1073,21 +1073,115 @@ func (session *Session) Count(bean interface{}) (int64, error) {
 		args = session.Statement.RawParams
 	}
 
-	resultsSlice, err := session.query(sqlStr, args...)
+	session.queryPreprocess(&sqlStr, args...)
+
+	var err error
+	var total int64
+	if session.IsAutoCommit {
+		err = session.DB().QueryRow(sqlStr, args...).Scan(&total)
+	} else {
+		err = session.Tx.QueryRow(sqlStr, args...).Scan(&total)
+	}
 	if err != nil {
 		return 0, err
 	}
 
-	var total int64
-	if len(resultsSlice) > 0 {
-		results := resultsSlice[0]
-		for _, value := range results {
-			total, err = strconv.ParseInt(string(value), 10, 64)
-			break
-		}
+	return total, nil
+}
+
+// Sum call sum some column. bean's non-empty fields are conditions.
+func (session *Session) Sum(bean interface{}, columnName string) (float64, error) {
+	defer session.resetStatement()
+	if session.IsAutoClose {
+		defer session.Close()
 	}
 
-	return int64(total), err
+	var sqlStr string
+	var args []interface{}
+	if len(session.Statement.RawSQL) == 0 {
+		sqlStr, args = session.Statement.genSumSql(bean, columnName)
+	} else {
+		sqlStr = session.Statement.RawSQL
+		args = session.Statement.RawParams
+	}
+
+	session.queryPreprocess(&sqlStr, args...)
+
+	var err error
+	var res float64
+	if session.IsAutoCommit {
+		err = session.DB().QueryRow(sqlStr, args...).Scan(&res)
+	} else {
+		err = session.Tx.QueryRow(sqlStr, args...).Scan(&res)
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	return res, nil
+}
+
+// Sums call sum some columns. bean's non-empty fields are conditions.
+func (session *Session) Sums(bean interface{}, columnNames ...string) ([]float64, error) {
+	defer session.resetStatement()
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+
+	var sqlStr string
+	var args []interface{}
+	if len(session.Statement.RawSQL) == 0 {
+		sqlStr, args = session.Statement.genSumSql(bean, columnNames...)
+	} else {
+		sqlStr = session.Statement.RawSQL
+		args = session.Statement.RawParams
+	}
+
+	session.queryPreprocess(&sqlStr, args...)
+
+	var err error
+	var res = make([]float64, len(columnNames), len(columnNames))
+	if session.IsAutoCommit {
+		err = session.DB().QueryRow(sqlStr, args...).ScanSlice(&res)
+	} else {
+		err = session.Tx.QueryRow(sqlStr, args...).ScanSlice(&res)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
+func (session *Session) SumsInt(bean interface{}, columnNames ...string) ([]int64, error) {
+	defer session.resetStatement()
+	if session.IsAutoClose {
+		defer session.Close()
+	}
+
+	var sqlStr string
+	var args []interface{}
+	if len(session.Statement.RawSQL) == 0 {
+		sqlStr, args = session.Statement.genSumSql(bean, columnNames...)
+	} else {
+		sqlStr = session.Statement.RawSQL
+		args = session.Statement.RawParams
+	}
+
+	session.queryPreprocess(&sqlStr, args...)
+
+	var err error
+	var res = make([]int64, 0, len(columnNames))
+	if session.IsAutoCommit {
+		err = session.DB().QueryRow(sqlStr, args...).ScanSlice(&res)
+	} else {
+		err = session.Tx.QueryRow(sqlStr, args...).ScanSlice(&res)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }
 
 // Find retrieve records from table, condiBeans's non-empty fields
@@ -1840,8 +1934,9 @@ func (session *Session) _row2Bean(rows *core.Rows, fields []string, fieldsCount 
 								return err
 							}
 							if has {
-								v := structInter.Elem().Interface()
-								fieldValue.Set(reflect.ValueOf(v))
+								//v := structInter.Elem().Interface()
+								//fieldValue.Set(reflect.ValueOf(v))
+								fieldValue.Set(structInter.Elem())
 							} else {
 								return errors.New("cascade obj is not exist!")
 							}
@@ -3076,7 +3171,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 
 		idByte := res[0][table.AutoIncrement]
 		id, err := strconv.ParseInt(string(idByte), 10, 64)
-		if err != nil {
+		if err != nil || id <= 0 {
 			return 1, err
 		}
 
@@ -3085,7 +3180,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 			session.Engine.logger.Error(err)
 		}
 
-		if aiValue == nil || !aiValue.IsValid() /*|| aiValue. != 0*/ || !aiValue.CanSet() {
+		if aiValue == nil || !aiValue.IsValid() || !aiValue.CanSet() {
 			return 1, nil
 		}
 
@@ -3121,7 +3216,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 
 		idByte := res[0][table.AutoIncrement]
 		id, err := strconv.ParseInt(string(idByte), 10, 64)
-		if err != nil {
+		if err != nil || id <= 0 {
 			return 1, err
 		}
 
@@ -3130,7 +3225,7 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 			session.Engine.logger.Error(err)
 		}
 
-		if aiValue == nil || !aiValue.IsValid() /*|| aiValue. != 0*/ || !aiValue.CanSet() {
+		if aiValue == nil || !aiValue.IsValid() || !aiValue.CanSet() {
 			return 1, nil
 		}
 
@@ -3172,12 +3267,11 @@ func (session *Session) innerInsert(bean interface{}) (int64, error) {
 			session.Engine.logger.Error(err)
 		}
 
-		if aiValue == nil || !aiValue.IsValid() /*|| aiValue.Int() != 0*/ || !aiValue.CanSet() {
+		if aiValue == nil || !aiValue.IsValid() || !aiValue.CanSet() {
 			return res.RowsAffected()
 		}
 
-		v := int64ToInt(id, aiValue.Type())
-		aiValue.Set(reflect.ValueOf(v))
+		aiValue.Set(int64ToIntValue(id, aiValue.Type()))
 
 		return res.RowsAffected()
 	}

@@ -239,7 +239,7 @@ func (engine *Engine) Close() error {
 func (engine *Engine) Ping() error {
 	session := engine.NewSession()
 	defer session.Close()
-	engine.logger.Info("PING DATABASE", engine.DriverName)
+	engine.logger.Infof("PING DATABASE %v", engine.DriverName())
 	return session.Ping()
 }
 
@@ -381,7 +381,7 @@ func (engine *Engine) DBMetas() ([]*core.Table, error) {
 		for _, index := range indexes {
 			for _, name := range index.Cols {
 				if col := table.GetColumn(name); col != nil {
-					col.Indexes[index.Name] = true
+					col.Indexes[index.Name] = index.Type
 				} else {
 					return nil, fmt.Errorf("Unknown col "+name+" in indexes %v of table", index, table.ColumnsSeq())
 				}
@@ -876,12 +876,12 @@ func (engine *Engine) TableInfo(bean interface{}) *core.Table {
 func addIndex(indexName string, table *core.Table, col *core.Column, indexType int) {
 	if index, ok := table.Indexes[indexName]; ok {
 		index.AddColumn(col.Name)
-		col.Indexes[index.Name] = true
+		col.Indexes[index.Name] = indexType
 	} else {
 		index := core.NewIndex(indexName, indexType)
 		index.AddColumn(col.Name)
 		table.AddIndex(index)
-		col.Indexes[index.Name] = true
+		col.Indexes[index.Name] = indexType
 	}
 }
 
@@ -930,7 +930,7 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 
 		if ormTagStr != "" {
 			col = &core.Column{FieldName: t.Field(i).Name, Nullable: true, IsPrimaryKey: false,
-				IsAutoIncrement: false, MapType: core.TWOSIDES, Indexes: make(map[string]bool)}
+				IsAutoIncrement: false, MapType: core.TWOSIDES, Indexes: make(map[string]int)}
 			tags := splitTag(ormTagStr)
 
 			if len(tags) > 0 {
@@ -954,8 +954,10 @@ func (engine *Engine) mapType(v reflect.Value) *core.Table {
 						for _, col := range parentTable.Columns() {
 							col.FieldName = fmt.Sprintf("%v.%v", t.Field(i).Name, col.FieldName)
 							table.AddColumn(col)
+							for indexName, indexType := range col.Indexes {
+								addIndex(indexName, table, col, indexType)
+							}
 						}
-
 						continue
 					default:
 						//TODO: warning
@@ -1534,12 +1536,32 @@ func (engine *Engine) Rows(bean interface{}) (*Rows, error) {
 	return session.Rows(bean)
 }
 
-// Count counts the records. bean's non-empty fields
-// are conditions.
+// Count counts the records. bean's non-empty fields are conditions.
 func (engine *Engine) Count(bean interface{}) (int64, error) {
 	session := engine.NewSession()
 	defer session.Close()
 	return session.Count(bean)
+}
+
+// Sum sum the records by some column. bean's non-empty fields are conditions.
+func (engine *Engine) Sum(bean interface{}, colName string) (float64, error) {
+	session := engine.NewSession()
+	defer session.Close()
+	return session.Sum(bean, colName)
+}
+
+// Sums sum the records by some columns. bean's non-empty fields are conditions.
+func (engine *Engine) Sums(bean interface{}, colNames ...string) ([]float64, error) {
+	session := engine.NewSession()
+	defer session.Close()
+	return session.Sums(bean, colNames...)
+}
+
+// SumsInt like Sums but return slice of int64 instead of float64.
+func (engine *Engine) SumsInt(bean interface{}, colNames ...string) ([]int64, error) {
+	session := engine.NewSession()
+	defer session.Close()
+	return session.SumsInt(bean, colNames...)
 }
 
 // Import SQL DDL file
