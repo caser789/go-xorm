@@ -1,15 +1,15 @@
+// Copyright 2015 The Xorm Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package xorm
 
 import (
 	"errors"
 	"regexp"
 
-	"github.com/caser789/go-xorm/core"
+	"github.com/go-xorm/core"
 )
-
-// func init() {
-// 	core.RegisterDriver("oci8", &oci8Driver{})
-// }
 
 type oci8Driver struct {
 }

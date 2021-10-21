@@ -352,7 +352,7 @@ func buildUpdates(engine *Engine, table *core.Table, bean interface{},
 						if len(table.PrimaryKeys) == 1 {
 							pkField := reflect.Indirect(fieldValue).FieldByName(table.PKColumns()[0].FieldName)
 							// fix non-int pk issues
-							if pkField.IsValid() && !isZero(pkField.Interface()) {
+							if pkField.IsValid() && (!requiredField && !isZero(pkField.Interface())) {
 								val = pkField.Interface()
 							} else {
 								continue
@@ -365,14 +365,19 @@ func buildUpdates(engine *Engine, table *core.Table, bean interface{},
 						val = fieldValue.Interface()
 					}
 				} else {
-					bytes, err := json.Marshal(fieldValue.Interface())
-					if err != nil {
-						panic(fmt.Sprintf("mashal %v failed", fieldValue.Interface()))
-					}
-					if col.SQLType.IsText() {
-						val = string(bytes)
-					} else if col.SQLType.IsBlob() {
-						val = bytes
+					// Blank struct could not be as update data
+					if requiredField || !isStructZero(fieldValue) {
+						bytes, err := json.Marshal(fieldValue.Interface())
+						if err != nil {
+							panic(fmt.Sprintf("mashal %v failed", fieldValue.Interface()))
+						}
+						if col.SQLType.IsText() {
+							val = string(bytes)
+						} else if col.SQLType.IsBlob() {
+							val = bytes
+						}
+					} else {
+						continue
 					}
 				}
 			}
@@ -674,10 +679,10 @@ func (statement *Statement) TableName() string {
 	}
 
 	if statement.RefTable != nil {
-		schema := statement.Engine.dialect.URI().Schema
+		/*schema := statement.Engine.dialect.URI().Schema
 		if len(schema) > 0 {
 			return schema + "." + statement.RefTable.Name
-		}
+		}*/
 		return statement.RefTable.Name
 	}
 	return ""
@@ -1009,7 +1014,7 @@ func (statement *Statement) Join(joinOP string, tablename interface{}, condition
 
 	fmt.Fprintf(&buf, " ON %v", condition)
 	statement.JoinStr = buf.String()
-	statement.joinArgs = args
+	statement.joinArgs = append(statement.joinArgs, args...)
 	return statement
 }
 
